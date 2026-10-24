@@ -1,9 +1,9 @@
 {
   "kit": "alladarmoussine/portfolio-kit",
   "source": "alladarmoussine/AlladarMoussineSite",
-  "build": 8,
+  "build": 9,
   "date": "2026-10-24",
-  "commit": "87198ee",
+  "commit": "643251a",
   "files": [
     ".gitattributes",
     "README.md",
@@ -16,6 +16,11 @@
     "starter/site.js"
   ],
   "notes": [
+    {
+      "build": 9,
+      "date": "2026-10-24",
+      "message": "Mouse effect settings: off, dot, label, spotlight or your own pointer, plus magnetic buttons"
+    },
     {
       "build": 8,
       "date": "2026-10-24",

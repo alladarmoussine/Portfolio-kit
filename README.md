@@ -15,7 +15,7 @@ it theirs without touching code. See [Making a copy for someone else](#making-a-
 | `content/site.js` | Editable content: site details, theme, categories, sections, work cards, showreel, About bio and skills, experience, toolkit, links, resume and photo paths. The admin panel rewrites this file |
 | `starter/site.js` | A blank version of `content/site.js` for starting someone else's copy |
 | `css/style.css` | All styling (colours are variables at the top, in `:root`; the Theme tab overrides them) |
-| `js/main.js` | Builds the page from `content/site.js`: theme, name, section order and titles, work categories and filter, links, top-section styles, admin shortcut, mobile menu, project pop-up, contact form, showreel embed, top-section background and timeline, heading animation, cursor dot, About photo reveal |
+| `js/main.js` | Builds the page from `content/site.js`: theme, name, section order and titles, work categories and filter, links, top-section styles, admin shortcut, mobile menu, project pop-up, contact form, showreel embed, top-section background and timeline, heading animation, mouse effect, About photo reveal |
 | `assets/profile.jpg` | Photo in the About section |
 | `assets/resume.pdf` | File the Resume button downloads (**placeholder**) |
 | `js/i18n.js` | Fixed interface text (menu, buttons, form labels) in English, Dutch and French |
@@ -91,7 +91,10 @@ browser's site data, just set it up again.
   changed: backgrounds, cards, borders, text, the two accent colours, text on buttons, and the
   top section's background and text. "Light or dark" swaps the backgrounds and text colours and
   keeps the accents. The top section stays dark on light themes so its text reads on photos and
-  video. Also the text and heading fonts and corner roundness. Fonts come from a Google Fonts list,
+  video. **Your colour schemes** keeps colour combinations to switch back to: name the current
+  colours and press **Save current colours**; click a saved scheme to use it again (stored as
+  `theme.saved`, so they're there on every computer). Also the text and heading fonts and corner
+  roundness. Fonts come from a Google Fonts list,
   or upload your own font files (.woff2, .woff, .ttf, .otf; saved in `assets/fonts/`): files with
   the same name form one family, each with its weight and style (stored as `theme.customFonts`).
 - **Removing things:** the eye hides a whole section, and the ticks in a section's editor hide its
@@ -118,6 +121,13 @@ browser's site data, just set it up again.
 - **Minimise (–):** slides the panel off to the right and leaves an **Admin** tab on the
   edge (with an orange dot if there are unsaved changes). Click the tab, a ✎, or the
   shortcut to bring it back.
+- **After saving:** each save is one commit (uploads, content and `index.html` together), and
+  `index.html` loads the content as `content/site.js?v=<save time>`, so browsers fetch the new
+  version instead of reusing an old copy. The host still needs a minute or two to publish; until
+  then, the browser that saved shows its latest save after a reload, with a small note in the
+  corner. If the note says the live site still hasn't caught up after 10 minutes, check that
+  GitHub Pages is publishing (the repository's Actions tab, or Settings → Pages). Visitors always
+  see the published version.
 - Edits show on the page behind the panel straight away as a preview. Nothing goes live
   until you click **Save & publish**, which commits the changes (and any uploaded files)
   to GitHub. The host then redeploys, usually within a minute or two.
@@ -324,8 +334,13 @@ All effects are in `js/main.js`, and all respect the visitor's "reduce motion" s
 
 - **Heading animation:** elements with the `reveal` class animate in letter by letter
   when scrolled into view.
-- **Cursor dot:** replaces the normal pointer on mouse or trackpad devices and grows over
-  links and buttons. Touch devices keep their normal behaviour.
+- **Mouse effect** (Theme tab, stored as `theme.cursor`): **Off** (the normal pointer), **Dot**
+  (size, colour: inverted / main accent / second accent, grow over links), **Label** (the dot
+  becomes a circle saying "View", or "Play" for projects with videos; the words are interface
+  text, so they're translated), **Spotlight** (the normal pointer with a soft accent glow following
+  it; size, strength, colour) or **Your own pointer** (an uploaded PNG/SVG, any size, centred or
+  pointing with its top-left corner). **Magnetic buttons** can be added to any of them. Only on
+  mouse or trackpad devices; touch devices and visitors who reduce motion keep the normal pointer.
 - **Editing timeline and preview monitor:** the strip at the bottom of the top section
   (`#hero-timeline`). Its V1 track has one clip per uploaded video in Work (featured projects
   first; YouTube videos are left out). A playhead sweeps across in real time with a running

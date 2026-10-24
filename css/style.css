@@ -677,29 +677,89 @@ main > section.is-first { border-top: 0; }
   .reveal .reveal-char { opacity: 1; transform: none; transition: none; }
 }
 
-/* Cursor dot (desktop only, added by js/main.js) */
+/* Mouse effect (mouse/trackpad only, built by js/main.js; admin: Theme tab).
+   --cursor-size comes from the settings. */
 .cursor {
   position: fixed;
   top: 0;
   left: 0;
   z-index: 1000;
-  width: 14px;
-  height: 14px;
-  margin: -7px 0 0 -7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--cursor-size, 14px);
+  height: var(--cursor-size, 14px);
+  margin: calc(var(--cursor-size, 14px) / -2) 0 0 calc(var(--cursor-size, 14px) / -2);
   border-radius: 50%;
   background: #fff;
+  /* Inverted: always visible, whatever is underneath */
   mix-blend-mode: difference;
   pointer-events: none;
-  transition: scale 0.25s ease, opacity 0.2s ease;
+  transition: scale 0.25s ease, opacity 0.2s ease, width 0.25s ease, height 0.25s ease, margin 0.25s ease;
   will-change: translate;
 }
 
+.cursor[hidden] { display: none; }
+.cursor[data-color="accent"] { background: var(--accent); mix-blend-mode: normal; }
+.cursor[data-color="accent2"] { background: var(--accent-orange); mix-blend-mode: normal; }
 .cursor.is-hover { scale: 2.8; }
+.cursor.is-hidden { opacity: 0; }
 
-/* The dot replaces the normal pointer while it's active */
+/* Label: over a project the dot becomes a circle saying View or Play */
+.cursor-label {
+  opacity: 0;
+  color: var(--on-accent);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition: opacity 0.2s ease;
+}
+
+.cursor.is-label {
+  width: 84px;
+  height: 84px;
+  margin: -42px 0 0 -42px;
+  background: var(--accent);
+  mix-blend-mode: normal;
+}
+
+.cursor.is-label[data-color="accent2"] { background: var(--accent-orange); }
+.cursor.is-label[data-color="accent2"] .cursor-label { color: var(--bg); }
+.cursor.is-label .cursor-label { opacity: 1; }
+
+/* Your own pointer: the uploaded picture, centred on the pointer or with its top-left corner as the tip */
+.cursor[data-style="image"] {
+  border-radius: 0;
+  background: center / contain no-repeat;
+  mix-blend-mode: normal;
+}
+
+.cursor[data-style="image"][data-tip="top-left"] { margin: 0; transform-origin: 0 0; }
+.cursor[data-style="image"].is-hover { scale: 1.3; }
+
+/* Spotlight: the normal pointer, with a soft glow following it (above the sections, below the header) */
+.cursor-glow {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  pointer-events: none;
+  background: radial-gradient(circle var(--glow-size, 320px) at var(--x, -999px) var(--y, -999px),
+    color-mix(in srgb, var(--glow-color, var(--accent)) var(--glow-strength, 18%), transparent), transparent 70%);
+  transition: opacity 0.3s ease;
+}
+
+.cursor-glow.is-hidden { opacity: 0; }
+
+/* The drawn pointer replaces the normal one while it's active */
 html.has-cursor,
 html.has-cursor * { cursor: none !important; }
-.cursor.is-hidden { opacity: 0; }
+
+/* Magnetic buttons: ease into and out of the pull */
+html.has-magnet :is(.btn, .featured-arrow, .contact-socials a, .filter-btn, .modal-arrow) {
+  transition: transform 0.15s ease, background 0.15s ease, color 0.15s ease, border-color 0.15s ease, translate 0.25s ease-out;
+}
 
 .subsection-first { margin-top: 0; }
 
@@ -1713,4 +1773,35 @@ main > section.is-off-page { display: none !important; }
 
 @media (max-width: 359px) {
   .logo { font-size: 1rem; }
+}
+
+/* Only in the browser that just saved in the admin panel, until the live site has caught up (js/main.js) */
+.save-note {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 800;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: min(380px, calc(100% - 32px));
+  padding: 12px 14px;
+  border: 1px solid var(--accent-orange);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+
+.save-note button {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
 }

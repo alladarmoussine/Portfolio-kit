@@ -109,6 +109,49 @@ function languageSettings(content) {
   return { main, available, ui: own.ui || {} };
 }
 
+// After saving in the admin panel, the host takes a minute or two to publish, and browsers may keep an
+// older copy of content/site.js for a while. The browser that saved keeps its latest save (admin.js,
+// rememberLatestSave) and shows that until the live content is at least as new, with a small note.
+// Visitors always see the published version.
+// Per site: several GitHub Pages sites of one account share an address (<user>.github.io/<repo>/)
+const LATEST_SAVE_KEY = `am-latest-save:${window.location.pathname.replace(/[^/]*$/, '')}`;
+const LATEST_SAVE_MAX_AGE = 24 * 60 * 60 * 1000;
+
+function latestSave() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LATEST_SAVE_KEY) || 'null');
+    if (!saved) return null;
+    const live = (window.SITE_CONTENT && window.SITE_CONTENT.savedAt) || '';
+    const age = Date.now() - Date.parse(saved.savedAt);
+    if (!saved.savedAt || !saved.content || saved.savedAt <= live || !(age < LATEST_SAVE_MAX_AGE)) {
+      localStorage.removeItem(LATEST_SAVE_KEY);
+      return null;
+    }
+    return { ...saved, age };
+  } catch {
+    return null;
+  }
+}
+
+function showSaveNote(age) {
+  const minutes = Math.round(age / 60000);
+  const when = minutes < 1 ? 'just now' : `${minutes} min ago`;
+  const note = el('div', 'save-note');
+  note.setAttribute('role', 'status');
+  note.appendChild(el('span', null, minutes < 10
+    ? `Showing your latest save (${when}). The live site is still updating; visitors see it within a few minutes.`
+    : `Showing your latest save (${when}), but the live site still has an older version. Check that GitHub Pages is publishing: your repository \u2192 Actions, or Settings \u2192 Pages.`));
+  const close = el('button', null, '\u00D7');
+  close.type = 'button';
+  close.setAttribute('aria-label', 'Close');
+  close.addEventListener('click', () => note.remove());
+  note.appendChild(close);
+  document.body.appendChild(note);
+}
+
+const pendingSave = latestSave();
+if (pendingSave) window.SITE_CONTENT = pendingSave.content;
+
 let langSettings = languageSettings(window.SITE_CONTENT);
 const isAvailable = (code) => langSettings.available.includes(code);
 
@@ -1204,6 +1247,126 @@ function applyTheme(theme) {
 // Used by the admin panel (Theme tab, and writing these into index.html on save)
 window.SiteTheme = { presets: THEME_PRESETS, fonts: THEME_FONTS, colors: themeColors, css: themeCss, fontsHref: themeFontsHref, favicon: faviconHref };
 
+// ---------- Mouse effect (admin: Theme tab) ----------
+// content.theme.cursor = { style, size, color, grow, image, tip, glowSize, glowStrength, glowColor, magnetic }
+// style: "off" (normal pointer), "dot", "label" (a dot that says View / Play over projects), "spotlight"
+// (normal pointer with a soft glow following it) or "image" (an uploaded picture as the pointer).
+// Only for a mouse or trackpad, and not for visitors who reduce motion: they keep the normal pointer.
+const CURSOR_DEFAULTS = {
+  style: 'dot', size: 14, color: 'invert', grow: true, image: '', tip: 'center',
+  glowSize: 320, glowStrength: 18, glowColor: 'accent', magnetic: false,
+};
+window.CURSOR_DEFAULTS = CURSOR_DEFAULTS;
+const cursorAllowed = window.matchMedia('(hover: hover) and (pointer: fine)').matches
+  && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const CURSOR_HOVER = 'a, button, .work-card, .featured-slide, input, textarea, select, .hero-timeline';
+const MAGNETIC = '.btn, .featured-arrow, .contact-socials a, .filter-btn, .modal-arrow';
+let cursorSet = { ...CURSOR_DEFAULTS };
+let cursorEl = null;
+let cursorLabel = null;
+let glowEl = null;
+let magnetTarget = null;
+
+// Dot, label and picture are drawn by the page (the real pointer is hidden); with a picture style
+// but no picture yet, it's a dot
+const drawsPointer = () => ['dot', 'label', 'image'].includes(cursorSet.style);
+const isFullscreen = () => Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+
+function releaseMagnet() {
+  if (!magnetTarget) return;
+  magnetTarget.style.translate = '';
+  magnetTarget = null;
+}
+
+// Magnetic buttons: the button under the mouse drifts a little toward it
+function pullMagnet(e) {
+  const target = e.target.closest ? e.target.closest(MAGNETIC) : null;
+  if (target !== magnetTarget) releaseMagnet();
+  if (!target) return;
+  magnetTarget = target;
+  const box = target.getBoundingClientRect();
+  const dx = (e.clientX - (box.left + box.width / 2)) * 0.25;
+  const dy = (e.clientY - (box.top + box.height / 2)) * 0.3;
+  target.style.translate = `${Math.max(Math.min(dx, 10), -10)}px ${Math.max(Math.min(dy, 8), -8)}px`;
+}
+
+function onCursorMove(e) {
+  if (cursorSet.style === 'spotlight') {
+    glowEl.style.setProperty('--x', `${e.clientX}px`);
+    glowEl.style.setProperty('--y', `${e.clientY}px`);
+    glowEl.classList.remove('is-hidden');
+  }
+  if (drawsPointer()) {
+    // `translate` (not `transform`), so growing with `scale` doesn't also move it
+    cursorEl.style.translate = `${e.clientX}px ${e.clientY}px`;
+    cursorEl.classList.remove('is-hidden');
+    const closest = (selector) => (e.target.closest ? e.target.closest(selector) : null);
+    const project = cursorSet.style === 'label' ? closest('.work-card, .featured-slide') : null;
+    if (project) {
+      const item = workItems[Number(project.dataset.index)];
+      cursorLabel.textContent = t(item && projectVideos(item).length ? 'cursor.play' : 'cursor.view');
+    }
+    cursorEl.classList.toggle('is-label', Boolean(project));
+    cursorEl.classList.toggle('is-hover', !project && Boolean(cursorSet.grow) && Boolean(closest(CURSOR_HOVER)));
+  }
+  if (cursorSet.magnetic) pullMagnet(e);
+}
+
+function setupCursor() {
+  if (cursorEl) return;
+  cursorEl = el('div', 'cursor is-hidden');
+  cursorEl.setAttribute('aria-hidden', 'true');
+  cursorLabel = el('span', 'cursor-label');
+  cursorEl.appendChild(cursorLabel);
+  glowEl = el('div', 'cursor-glow is-hidden');
+  glowEl.setAttribute('aria-hidden', 'true');
+  document.body.append(glowEl, cursorEl);
+  document.addEventListener('mousemove', onCursorMove);
+  // Hide it when the mouse leaves the window or moves over an embedded video, which shows its own pointer
+  document.addEventListener('mouseout', (e) => {
+    if (e.relatedTarget && e.relatedTarget.tagName !== 'IFRAME') return;
+    cursorEl.classList.add('is-hidden');
+    glowEl.classList.add('is-hidden');
+    releaseMagnet();
+  });
+  // A fullscreen video sits in the browser's top layer, above anything the page draws, so the drawn
+  // pointer can't show there: hand the pointer back to the browser and restore it on exit
+  const onFullscreenChange = () => {
+    document.documentElement.classList.toggle('has-cursor', drawsPointer() && !isFullscreen());
+    cursorEl.classList.add('is-hidden');
+  };
+  document.addEventListener('fullscreenchange', onFullscreenChange);
+  document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+}
+
+function applyCursor(settings) {
+  cursorSet = { ...CURSOR_DEFAULTS, ...(settings || {}) };
+  if (!['off', 'dot', 'label', 'spotlight', 'image'].includes(cursorSet.style)) cursorSet.style = 'dot';
+  const root = document.documentElement;
+  if (!cursorAllowed) {
+    root.classList.remove('has-cursor', 'has-magnet');
+    return;
+  }
+  setupCursor();
+  const picture = cursorSet.style === 'image' && cursorSet.image ? assetUrl(cursorSet.image) : '';
+  const shape = cursorSet.style === 'image' && !picture ? 'dot' : cursorSet.style;
+  root.classList.toggle('has-cursor', drawsPointer() && !isFullscreen());
+  root.classList.toggle('has-magnet', Boolean(cursorSet.magnetic));
+  if (!cursorSet.magnetic) releaseMagnet();
+  cursorEl.hidden = !drawsPointer();
+  glowEl.hidden = cursorSet.style !== 'spotlight';
+  cursorEl.dataset.style = shape;
+  cursorEl.dataset.color = cursorSet.color;
+  cursorEl.dataset.tip = cursorSet.tip;
+  const size = Math.min(Math.max(Number(cursorSet.size) || 14, 6), shape === 'image' ? 128 : 40);
+  cursorEl.style.setProperty('--cursor-size', `${size}px`);
+  cursorEl.style.backgroundImage = picture ? `url("${cssString(picture)}")` : '';
+  if (cursorSet.style !== 'label') cursorEl.classList.remove('is-label');
+  glowEl.style.setProperty('--glow-size', `${Math.min(Math.max(Number(cursorSet.glowSize) || 320, 100), 800)}px`);
+  glowEl.style.setProperty('--glow-strength', `${Math.min(Math.max(Number(cursorSet.glowStrength) || 18, 2), 60)}%`);
+  glowEl.style.setProperty('--glow-color', cursorSet.glowColor === 'accent2' ? 'var(--accent-orange)' : 'var(--accent)');
+}
+
 // ---------- Your name and site details (admin: Site tab) ----------
 function renderIdentity(site, theme) {
   siteName = (site.name || '').trim() || 'Your Name';
@@ -1440,6 +1603,7 @@ function renderSite(fullContent) {
   const content = localize(fullContent);
   categories = Array.isArray(content.categories) && content.categories.length ? content.categories : DEFAULT_CATEGORIES;
   applyTheme(content.theme);
+  applyCursor(content.theme && content.theme.cursor);
   renderIdentity(content.site || {}, content.theme);
   workItems = content.work || [];
   renderCustomSections(content);
@@ -1655,6 +1819,7 @@ document.addEventListener('keydown', (e) => {
 
 applyLanguage();
 renderSite(window.SITE_CONTENT || {});
+if (pendingSave) showSaveNote(pendingSave.age);
 loadAnalytics((window.SITE_CONTENT || {}).analytics);
 
 // Cloudflare Web Analytics: only loads once a token is set (admin panel, Site tab),
@@ -1741,39 +1906,6 @@ if (reduceMotion || !('IntersectionObserver' in window)) {
     });
   }, { threshold: 0.3 });
   revealHeadings.forEach((h) => revealObserver.observe(h));
-}
-
-// Cursor dot (mouse/trackpad only)
-if (window.matchMedia('(hover: hover) and (pointer: fine)').matches && !reduceMotion) {
-  const cursor = document.createElement('div');
-  cursor.className = 'cursor is-hidden';
-  cursor.setAttribute('aria-hidden', 'true');
-  document.body.appendChild(cursor);
-  document.documentElement.classList.add('has-cursor');
-
-  document.addEventListener('mousemove', (e) => {
-    // Use `translate` (not `transform`) so the hover `scale` doesn't also scale the position
-    cursor.style.translate = `${e.clientX}px ${e.clientY}px`;
-    cursor.classList.remove('is-hidden');
-    cursor.classList.toggle('is-hover', Boolean(e.target.closest('a, button, .work-card, input, textarea, .hero-timeline')));
-  });
-
-  // Hide the dot when the mouse leaves the window or moves over the embedded video,
-  // which shows its own pointer.
-  document.addEventListener('mouseout', (e) => {
-    if (!e.relatedTarget || e.relatedTarget.tagName === 'IFRAME') cursor.classList.add('is-hidden');
-  });
-
-  // A fullscreen video sits in the browser's top layer, above everything else on the
-  // page, so the dot can never be drawn over it. Hand the cursor back to the browser
-  // (native fullscreen controls show their own pointer) and restore the dot on exit.
-  const onFullscreenChange = () => {
-    const isFullscreen = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
-    document.documentElement.classList.toggle('has-cursor', !isFullscreen);
-    cursor.classList.add('is-hidden');
-  };
-  document.addEventListener('fullscreenchange', onFullscreenChange);
-  document.addEventListener('webkitfullscreenchange', onFullscreenChange);
 }
 
 // Runs the playhead while the top section is on screen; pauses the monitor otherwise

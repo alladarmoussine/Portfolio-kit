@@ -174,13 +174,6 @@
 
   const getFile = (path) => gh(`/contents/${encodePath(path)}?ref=${encodeURIComponent(state.store.repo.branch)}`);
 
-  function putFile(path, contentB64, sha, message) {
-    return gh(`/contents/${encodePath(path)}`, {
-      method: 'PUT',
-      body: JSON.stringify({ message, content: contentB64, branch: state.store.repo.branch, ...(sha ? { sha } : {}) }),
-    });
-  }
-
   // ---------- Content ----------
   const clone = (value) => JSON.parse(JSON.stringify(value));
   const serialize = (content) => `${FILE_HEADER}window.SITE_CONTENT = ${JSON.stringify(content, null, 2)};\n`;
@@ -215,6 +208,8 @@
     c.languages = { main: languages.main, available: languages.available, ui: { ...((c.languages || {}).ui || {}) } };
     c.theme = { preset: 'midnight', font: 'Geologica', headingFont: '', radius: 14, ...(c.theme || {}) };
     c.theme.colors = { ...(c.theme.colors || {}) };
+    c.theme.cursor = { ...(window.CURSOR_DEFAULTS || {}), ...(c.theme.cursor || {}) };
+    c.theme.saved = (Array.isArray(c.theme.saved) ? c.theme.saved : []).map((scheme) => ({ name: '', preset: 'midnight', ...scheme, colors: { ...((scheme && scheme.colors) || {}) } }));
     c.theme.customFonts = (c.theme.customFonts || []).map((f) => ({ name: '', file: '', weight: 'auto', style: 'normal', ...f }));
     c.customSections = (c.customSections || []).map(normalizeSection);
     c.workGrids = (c.workGrids || []).map((grid) => ({ intro: '', ...grid }));
@@ -365,6 +360,7 @@
   function referencedPaths(content) {
     const paths = new Set([content.site.favicon, content.site.shareImage, content.resume, content.about.photo, content.hero.background, content.hero.backgroundVideo, content.hero.portrait]);
     content.theme.customFonts.forEach((f) => paths.add(f.file));
+    paths.add(content.theme.cursor.image);
     content.customSections.forEach((sec) => paths.add(sec.image));
     content.work.forEach((item) => {
       paths.add(item.thumb);
@@ -1816,7 +1812,8 @@
   function languagesBox() {
     const L = state.draft.languages;
     const names = window.LANGUAGE_NAMES || {};
-    const builtIn = window.SITE_LANGUAGES || {};
+    // Languages that come with interface text (js/i18n.js); others need it typed in
+    const hasUiText = (code) => Object.values(window.SITE_UI_TEXT || {}).some((entry) => entry[code]);
     const swap = (i, dir) => { [L.available[i], L.available[i + dir]] = [L.available[i + dir], L.available[i]]; languagesChanged(); };
     return h('div', { class: 'adm-form adm-group-box', 'data-adm-section': 'languages' },
       h('h3', { class: 'adm-group', text: 'Languages' }),
@@ -1844,7 +1841,7 @@
               title: 'Interface text in this language',
               onclick: () => { state.openLang = isOpen ? null : code; rerenderTab(); },
             }, h('span', { class: 'adm-badge', text: code.toUpperCase() }), h('span', { text: names[code] }),
-            h('span', { class: 'adm-hint', text: code === L.main ? 'main language' : builtIn[code] ? '' : 'interface text to translate' })),
+            h('span', { class: 'adm-hint', text: code === L.main ? 'main language' : hasUiText(code) ? '' : 'interface text to translate' })),
             h('div', { class: 'adm-row-controls' },
               iconBtn('\u2191', 'Move up', () => swap(i, -1), i === 0),
               iconBtn('\u2193', 'Move down', () => swap(i, 1), i === L.available.length - 1),
@@ -1893,6 +1890,64 @@
     NEUTRAL_COLORS.forEach((key) => { theme.colors[key] = base[key] || base.bg; });
     delete theme.colors.heroText;
     theme.colors.mode = mode;
+  }
+
+  // ---------- Saved colour schemes ----------
+  // theme.saved = [{ name, preset, colors }]: colour combinations kept to switch back to, stored with the
+  // site's content so they're there on every computer
+  const schemeKey = (scheme) => JSON.stringify({ preset: scheme.preset, colors: scheme.colors || {} });
+  const currentScheme = (theme) => ({ preset: theme.preset, colors: { ...theme.colors } });
+
+  // Switching away from colours that are in no saved scheme loses them: say so first
+  function confirmColourSwitch(theme) {
+    const custom = Object.keys(theme.colors).filter((key) => key !== 'mode').length > 0;
+    const kept = theme.saved.some((scheme) => schemeKey(scheme) === schemeKey(currentScheme(theme)));
+    return !custom || kept || confirm('Switch colours? Your own colour changes aren\u2019t saved as a scheme yet, so they\u2019ll be replaced. (Cancel, then use \u201CSave current colours\u201D to keep them.)');
+  }
+
+  function colourSchemesBox(theme, swatch) {
+    const saved = theme.saved;
+    const active = schemeKey(currentScheme(theme));
+    const name = h('input', { type: 'text', placeholder: 'Name, e.g. Summer', maxLength: 40 });
+    const saveCurrent = () => {
+      const label = name.value.trim() || `Scheme ${saved.length + 1}`;
+      const existing = saved.findIndex((scheme) => scheme.name.toLowerCase() === label.toLowerCase());
+      if (existing >= 0 && !confirm(`Replace the saved scheme \u201C${saved[existing].name}\u201D with the current colours?`)) return;
+      const scheme = { name: label, ...currentScheme(theme) };
+      if (existing >= 0) saved[existing] = scheme;
+      else saved.push(scheme);
+      rerenderTab();
+    };
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveCurrent(); } });
+    return h('div', { class: 'adm-form adm-group-box' },
+      h('h3', { class: 'adm-group', text: 'Your colour schemes' }),
+      saved.length
+        ? h('div', { class: 'adm-presets' }, saved.map((scheme, i) => {
+          const colors = window.SiteTheme.colors(scheme);
+          const isActive = schemeKey(scheme) === active;
+          return h('div', { class: 'adm-scheme' },
+            h('button', {
+              class: `adm-preset${isActive ? ' is-active' : ''}`,
+              type: 'button',
+              'aria-pressed': String(isActive),
+              title: 'Use these colours',
+              onclick: () => {
+                if (isActive || !confirmColourSwitch(theme)) return;
+                theme.preset = scheme.preset;
+                theme.colors = { ...scheme.colors };
+                rerenderTab();
+              },
+            }, h('span', { class: 'adm-swatches' }, swatch(colors.bg), swatch(colors.surface), swatch(colors.accent), swatch(colors.accent2)), h('span', { text: scheme.name })),
+            iconBtn('\u2715', `Delete \u201C${scheme.name}\u201D`, () => {
+              if (!confirm(`Delete the saved scheme \u201C${scheme.name}\u201D? The colours you\u2019re using now stay.`)) return;
+              saved.splice(i, 1);
+              rerenderTab();
+            }));
+        }))
+        : h('p', { class: 'adm-hint', text: 'Save the colours you have now to switch back to them later, or to try several looks. Saved schemes are kept with the site, on every computer.' }),
+      h('div', { class: 'adm-scheme-save' },
+        name,
+        h('button', { class: 'adm-btn', type: 'button', text: 'Save current colours', onclick: saveCurrent })));
   }
 
   // ---------- Uploaded fonts ----------
@@ -1978,12 +2033,13 @@
           type: 'button',
           'aria-pressed': String(theme.preset === key),
           onclick: () => {
-            if (Object.keys(theme.colors).length && !confirm('Switch to this preset? Your own colour changes are replaced by its colours.')) return;
+            if (!confirmColourSwitch(theme)) return;
             theme.preset = key;
             theme.colors = {};
             rerenderTab();
           },
         }, h('span', { class: 'adm-swatches' }, swatch(p.bg), swatch(p.surface), swatch(p.accent), swatch(p.accent2)), h('span', { text: p.name }))))),
+      colourSchemesBox(theme, swatch),
       h('div', { class: 'adm-form adm-group-box' },
         h('h3', { class: 'adm-group', text: 'Colours' }),
         field('Light or dark', h('select', {
@@ -2008,7 +2064,66 @@
         customFontsBox(theme)),
       h('div', { class: 'adm-form adm-group-box' },
         h('h3', { class: 'adm-group', text: 'Shape' }),
-        slider(theme, 'radius', 'Corner roundness', 0, 28, 2, ' px', 'Cards, the showreel frame and pop-ups.')));
+        slider(theme, 'radius', 'Corner roundness', 0, 28, 2, ' px', 'Cards, the showreel frame and pop-ups.')),
+      cursorBox(theme));
+  }
+
+  // ---------- Mouse effect (Theme tab) ----------
+  const CURSOR_STYLES = [
+    ['off', 'Off: the normal pointer'],
+    ['dot', 'Dot'],
+    ['label', 'Label: a dot that says \u201CView\u201D or \u201CPlay\u201D over projects'],
+    ['spotlight', 'Spotlight: a soft glow following the mouse'],
+    ['image', 'Your own pointer: an image you upload'],
+  ];
+
+  function cursorBox(theme) {
+    const cur = theme.cursor;
+    const style = cur.style;
+    const colour = () => choice(cur, 'color', 'Colour', [['invert', 'Inverted (shows on anything)'], ['accent', 'Main accent'], ['accent2', 'Second accent']]);
+    const grow = (label) => check(cur, 'grow', label || 'Grow over links and buttons');
+    const preview = cur.image ? (window.SITE_ASSET_OVERRIDES[cur.image] || cur.image) : '';
+    return h('div', { class: 'adm-form adm-group-box', 'data-adm-section': 'cursor' },
+      h('h3', { class: 'adm-group', text: 'Mouse effect' }),
+      field('Style', h('select', {
+        onchange: (e) => {
+          cur.style = e.target.value;
+          // The dot and the picture share the size: give each a sensible size when switching
+          if (cur.style === 'image' && cur.size < 16) cur.size = 32;
+          if ((cur.style === 'dot' || cur.style === 'label') && cur.size > 30) cur.size = 14;
+          rerenderTab();
+        },
+      },
+        CURSOR_STYLES.map(([value, label]) => h('option', { value, text: label, selected: style === value })))),
+      style === 'dot' || style === 'label' ? [
+        slider(cur, 'size', 'Dot size', 8, 30, 1, ' px'),
+        colour(),
+        grow(),
+        style === 'label' ? h('p', { class: 'adm-hint', text: 'Over a project it becomes a circle saying \u201CView\u201D, or \u201CPlay\u201D when the project has videos. The words follow the site\u2019s language (Site tab \u2192 Languages \u2192 interface text).' }) : null,
+      ] : null,
+      style === 'spotlight' ? [
+        slider(cur, 'glowSize', 'Glow size', 150, 600, 10, ' px'),
+        slider(cur, 'glowStrength', 'Glow strength', 5, 40, 1, '%'),
+        choice(cur, 'glowColor', 'Glow colour', [['accent', 'Main accent'], ['accent2', 'Second accent']]),
+      ] : null,
+      style === 'image' ? [
+        h('div', { class: 'adm-field' },
+          h('span', { class: 'adm-label', text: 'Pointer image' }),
+          h('div', { class: 'adm-inline' },
+            preview ? h('img', { class: 'adm-cursor-preview', src: preview, alt: '' }) : null,
+            currentFile(cur.image),
+            cur.image ? h('button', { class: 'adm-link', type: 'button', text: 'Remove', onclick: () => { cur.image = ''; rerenderTab(); } }) : null),
+          filePicker('image/png,image/svg+xml,image/gif,image/webp,.png,.svg,.gif,.webp', (file) => {
+            const path = stageFile(file, `assets/cursor-${Date.now().toString(36)}${extension(file) || '.png'}`);
+            if (path) { cur.image = path; rerenderTab(); }
+          }),
+          h('span', { class: 'adm-hint', text: 'A PNG or SVG with a transparent background works best. Until there is one, a dot is shown.' })),
+        slider(cur, 'size', 'Size', 16, 96, 2, ' px'),
+        choice(cur, 'tip', 'Where it points', [['center', 'The middle of the image'], ['top-left', 'The top-left corner (for arrow shapes)']]),
+        grow('Grow a little over links and buttons'),
+      ] : null,
+      check(cur, 'magnetic', 'Magnetic buttons: buttons drift a little toward the mouse'),
+      h('p', { class: 'adm-hint', text: 'Only on computers with a mouse or trackpad. Phones and tablets keep their normal touch, and visitors who prefer less motion get the normal pointer.' }));
   }
 
   // ---------- Page tab: the page as an outline ----------
@@ -2890,6 +3005,21 @@
   // ---------- Page details in index.html ----------
   const escHtml = (value) => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+  // The content file's address carries the save time (content/site.js?v=…), so a browser that has an
+  // older copy stored has to fetch the new one
+  function stampContentFile(html, content) {
+    const stamp = content.savedAt ? `?v=${encodeURIComponent(content.savedAt)}` : '';
+    return html.replace(/(<script src="content\/site\.js)[^"]*(")/, (match, before, after) => before + stamp + after);
+  }
+
+  // The latest save, kept in this browser so a reload shows it even before the host has published it
+  // (js/main.js shows it, with a note, until the live site catches up)
+  // Per site: several GitHub Pages sites of one account share an address (<user>.github.io/<repo>/)
+  const LATEST_SAVE_KEY = `am-latest-save:${window.location.pathname.replace(/[^/]*$/, '')}`;
+  function rememberLatestSave(content) {
+    try { localStorage.setItem(LATEST_SAVE_KEY, JSON.stringify({ savedAt: content.savedAt, content })); } catch { /* storage full or blocked */ }
+  }
+
   // Rewrites the spots index.html marks for this (title, meta tags, favicon, fonts, theme, name)
   function withSiteDetails(html, content) {
     const T = window.SiteTheme;
@@ -2898,7 +3028,7 @@
     const words = name.split(/\s+/);
     const title = site.title.trim() || `${name} Portfolio`;
     const description = site.description.trim() || `${name}'s portfolio.`;
-    let out = html;
+    let out = stampContentFile(html, content);
     const swap = (pattern, value) => { out = out.replace(pattern, (match, before, after) => before + value + after); };
     const meta = (key) => new RegExp(`(<meta[^>]*(?:name|property)="${key}"[^>]*\\scontent=")[^"]*(")`);
     swap(/(<title>)[^<]*(<\/title>)/, escHtml(title));
@@ -2925,15 +3055,6 @@
     if (extra) out = out.replace(/(<meta name="twitter:description"[^>]*>)/, (match) => `${match}\n${extra}`);
     swap(meta('twitter:card'), site.shareImage ? 'summary_large_image' : 'summary');
     return out;
-  }
-
-  async function syncIndexHtml(content) {
-    if (!content.site.name.trim() || !window.SiteTheme) return;
-    const file = await getFile(INDEX_PATH);
-    if (!file || !file.content) return;
-    const html = b64ToText(file.content);
-    const next = withSiteDetails(html, content);
-    if (next !== html) await putFile(INDEX_PATH, textToB64(next), file.sha, 'Admin: update page title, theme and icon');
   }
 
   // ---------- Save ----------
@@ -2968,34 +3089,38 @@
       });
       content.customLinks = content.customLinks.filter((l) => l.url);
 
+      // When it was saved: the page compares this with the copy this browser keeps (see main.js)
+      content.savedAt = new Date().toISOString();
+
+      // Everything goes in one commit (uploads, content, index.html), so the host publishes once
       const used = referencedPaths(content);
       const uploads = [...state.pending].filter(([path]) => used.has(path));
+      const entries = [];
       for (let i = 0; i < uploads.length; i++) {
         const [path, file] = uploads[i];
-        updateStatus(`Uploading ${file.name} (${i + 1}/${uploads.length})…`);
-        const existing = await getFile(path);
-        await putFile(path, await fileToB64(file), existing && existing.sha, `Admin: upload ${path}`);
-        state.pending.delete(path);
+        updateStatus(`Preparing ${file.name} (${i + 1}/${uploads.length})…`);
+        entries.push({ path, contentB64: await fileToB64(file) });
       }
+      entries.push({ path: CONTENT_PATH, contentB64: textToB64(serialize(content)) });
+      // index.html: title, link previews, icon, fonts and colours (for search engines, previews and the
+      // first paint), and a new address for the content file so browsers don't keep showing an old copy
+      const index = await getFile(INDEX_PATH);
+      if (index && index.content) {
+        const html = b64ToText(index.content);
+        const next = content.site.name.trim() ? withSiteDetails(html, content) : stampContentFile(html, content);
+        if (next !== html) entries.push({ path: INDEX_PATH, contentB64: textToB64(next) });
+      }
+      updateStatus(uploads.length ? `Uploading ${uploads.length} file(s) and saving…` : 'Saving…');
+      await commitFiles(entries, uploads.length ? `Admin: update site content (${uploads.length} new file(s))` : 'Admin: update site content');
       state.pending.clear();
-
-      updateStatus('Saving content…');
-      const result = await putFile(CONTENT_PATH, textToB64(serialize(content)), remoteSha, 'Admin: update site content');
-      state.remoteSha = result.content.sha;
+      const saved = await getFile(CONTENT_PATH);
+      state.remoteSha = saved ? saved.sha : null;
+      rememberLatestSave(content);
       // Saved files stay previewed from their local copies until the host redeploys
       window.SITE_CONTENT = content;
       state.draft.work.forEach((item) => item.videos.forEach((clip) => { delete clip._mode; }));
       state.savedJson = snapshot();
       state.note = '';
-      // Title, link previews, favicon, fonts and colours also live in index.html, for search engines,
-      // link previews and the first paint. A failure here doesn't undo the content save.
-      try {
-        updateStatus('Updating page title and theme…');
-        await syncIndexHtml(content);
-      } catch (error) {
-        updateStatus(`Content saved, but index.html could not be updated: ${error.message}`, 'error');
-        return;
-      }
       updateStatus('Saved. The live site updates in a minute or two.', 'ok');
       // First save after starting fresh: offer to delete the previous owner's files
       if (state.offerCleanup) {

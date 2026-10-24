@@ -720,3 +720,13 @@
 /* Updates: what's new since the installed version */
 .adm-notes { margin: 0; padding-left: 18px; display: grid; gap: 4px; color: var(--text-dim); font-size: 0.88rem; }
 .adm-notes strong { color: var(--text); }
+
+/* Saved colour schemes: preset-style buttons with a small delete in the corner */
+.adm-scheme { position: relative; display: grid; }
+.adm-scheme > .adm-preset { padding-right: 34px; }
+.adm-scheme > .adm-icon { position: absolute; top: 6px; right: 6px; }
+.adm-scheme-save { display: flex; gap: 8px; }
+.adm-scheme-save input { flex: 1; }
+
+/* Mouse effect: the uploaded pointer image */
+.adm-cursor-preview { width: 32px; height: 32px; object-fit: contain; flex: none; }
