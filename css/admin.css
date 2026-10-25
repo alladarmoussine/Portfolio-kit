@@ -730,3 +730,25 @@
 
 /* Mouse effect: the uploaded pointer image */
 .adm-cursor-preview { width: 32px; height: 32px; object-fit: contain; flex: none; }
+
+/* Update notice: a slim bar under the top bar when the kit has a newer version */
+.adm-update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.adm-update-banner strong { margin-left: auto; color: var(--accent); white-space: nowrap; }
+.adm-update-banner:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+.adm-update-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-orange); }

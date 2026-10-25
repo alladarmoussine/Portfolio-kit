@@ -1,3 +1,8 @@
+// The version index.html loads the code with (?v=…, added by updates): the admin panel's files get the same
+const CODE_VERSION = (() => {
+  try { return document.currentScript ? new URL(document.currentScript.src).search : ''; } catch { return ''; }
+})();
+
 // Mobile nav toggle
 const navToggle = document.getElementById('nav-toggle');
 const mainNav = document.getElementById('main-nav');
@@ -1852,10 +1857,10 @@ document.addEventListener('keydown', (e) => {
   adminLoading = true;
   const style = document.createElement('link');
   style.rel = 'stylesheet';
-  style.href = 'css/admin.css';
+  style.href = `css/admin.css${CODE_VERSION}`;
   document.head.appendChild(style);
   const script = document.createElement('script');
-  script.src = 'js/admin.js';
+  script.src = `js/admin.js${CODE_VERSION}`;
   script.onload = () => window.SiteAdmin.toggle();
   script.onerror = () => { adminLoading = false; };
   document.body.appendChild(script);

@@ -1,9 +1,9 @@
 {
   "kit": "alladarmoussine/portfolio-kit",
   "source": "alladarmoussine/AlladarMoussineSite",
-  "build": 9,
-  "date": "2026-10-24",
-  "commit": "643251a",
+  "build": 10,
+  "date": "2026-10-25",
+  "commit": "78de6cc",
   "files": [
     ".gitattributes",
     "README.md",
@@ -16,6 +16,11 @@
     "starter/site.js"
   ],
   "notes": [
+    {
+      "build": 10,
+      "date": "2026-10-25",
+      "message": "Admin: notice a kit update on unlock, with a bar that opens the Updates section"
+    },
     {
       "build": 9,
       "date": "2026-10-24",

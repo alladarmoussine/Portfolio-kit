@@ -26,7 +26,9 @@
     savedJson: '',
     remoteSha: null,
     pending: new Map(), // repo path -> File waiting to be uploaded
-    offerCleanup: false, // started fresh from a copy: offer to delete unused files after the first save
+    offerCleanup: false,
+    updateChecked: false, // checked the kit for a newer version this session
+    updateInfo: null, // the newer version found, for the notice and the Updates box // started fresh from a copy: offer to delete unused files after the first save
     tab: 'page',
     openRow: null, // the section open in the Page tab
     openLang: null, // the language whose interface text is open in the Site tab
@@ -1014,6 +1016,7 @@
 
   async function afterUnlock() {
     resetIdle();
+    checkUpdatesInBackground();
     if (!state.draft) {
       await loadRemote();
       if (isCopy()) { showCopyNotice(); return; }
@@ -1391,7 +1394,11 @@
       if (!file || typeof file.content !== 'string') continue;
       let contentB64 = file.content.replace(/\s/g, '');
       // The kit's index.html is neutral: put this site's name, title, icon and theme back in
-      if (files[i] === INDEX_PATH && saved.site && saved.site.name.trim()) contentB64 = textToB64(withSiteDetails(b64ToText(contentB64), saved));
+      if (files[i] === INDEX_PATH) {
+        let html = b64ToText(contentB64);
+        if (saved.site && saved.site.name.trim()) html = withSiteDetails(html, saved);
+        contentB64 = textToB64(stampCodeFiles(html, latest.build));
+      }
       entries.push({ path: files[i], contentB64 });
     }
     progress('Installing\u2026');
@@ -1402,57 +1409,100 @@
     const body = h('div', { class: 'adm-form' });
     const show = (...nodes) => { body.innerHTML = ''; nodes.flat().filter(Boolean).forEach((n) => body.appendChild(n)); };
     const versionText = (manifest) => `version ${manifest.build}${manifest.date ? ` (${manifest.date})` : ''}`;
+
+    function showResult(result) {
+      if (result.status === 'unknown') {
+        show(h('p', { class: 'adm-hint', text: `This site has no ${KIT_MANIFEST}, so it doesn\u2019t know where updates come from.` }));
+      } else if (result.status === 'source') {
+        show(h('p', { class: 'adm-hint', text: `This site is where ${result.kitRepo.owner}/${result.kitRepo.repo} comes from: code you push to main is published there automatically.` }));
+      } else if (result.status === 'unreachable') {
+        show(h('p', { class: 'adm-error', text: `Couldn\u2019t read ${result.kitRepo.owner}/${result.kitRepo.repo}. Is it public?` }), check);
+      } else if (result.status === 'current') {
+        show(h('p', { class: 'adm-hint', text: `Up to date: ${versionText(result.latest)}.` }), check);
+      } else {
+        const err = errorLine();
+        const status = h('p', { class: 'adm-hint' });
+        const install = h('button', {
+          class: 'adm-btn adm-btn-primary',
+          type: 'button',
+          text: `Update to version ${result.latest.build}`,
+          onclick: async () => {
+            if (isDirty() && !confirm('You have unsaved changes. The update doesn\u2019t touch them, but save them afterwards. Continue?')) return;
+            install.disabled = true;
+            try {
+              await installUpdate(result.kitRepo, result.latest, (text) => { status.textContent = text; });
+              state.updateInfo = null;
+              const banner = screen.querySelector('.adm-update-banner');
+              if (banner) banner.remove();
+              show(h('p', { class: 'adm-status is-ok', text: `Updated to version ${result.latest.build}. The live site updates in a minute or two; reload the page then to use the new version of this panel too.` }));
+            } catch (error) {
+              err.textContent = error.message;
+              status.textContent = '';
+              install.disabled = false;
+            }
+          },
+        });
+        show(
+          h('p', { text: `Version ${result.latest.build} is available${result.installed.build ? ` (you have version ${result.installed.build})` : ''}.` }),
+          result.notes.length ? h('ul', { class: 'adm-notes' }, result.notes.map((n) => h('li', null, h('strong', { text: `${n.build}` }), ` ${n.message}`))) : null,
+          h('p', { class: 'adm-hint', text: 'Updating replaces the site\u2019s code with the new version. Your content, pictures, files and translations stay as they are.' }),
+          status, err, install);
+      }
+    }
+
     const check = h('button', {
       class: 'adm-btn',
       type: 'button',
       text: 'Check for updates',
       onclick: async () => {
         show(h('p', { class: 'adm-hint', text: 'Checking\u2026' }));
-        let result;
         try {
-          result = await checkForUpdates();
+          showResult(await checkForUpdates());
         } catch (error) {
           show(h('p', { class: 'adm-error', text: error.message }), check);
-          return;
-        }
-        if (result.status === 'unknown') {
-          show(h('p', { class: 'adm-hint', text: `This site has no ${KIT_MANIFEST}, so it doesn\u2019t know where updates come from.` }));
-        } else if (result.status === 'source') {
-          show(h('p', { class: 'adm-hint', text: `This site is where ${result.kitRepo.owner}/${result.kitRepo.repo} comes from: code you push to main is published there automatically.` }));
-        } else if (result.status === 'unreachable') {
-          show(h('p', { class: 'adm-error', text: `Couldn\u2019t read ${result.kitRepo.owner}/${result.kitRepo.repo}. Is it public?` }), check);
-        } else if (result.status === 'current') {
-          show(h('p', { class: 'adm-hint', text: `Up to date: ${versionText(result.latest)}.` }), check);
-        } else {
-          const err = errorLine();
-          const status = h('p', { class: 'adm-hint' });
-          const install = h('button', {
-            class: 'adm-btn adm-btn-primary',
-            type: 'button',
-            text: `Update to version ${result.latest.build}`,
-            onclick: async () => {
-              if (isDirty() && !confirm('You have unsaved changes. The update doesn\u2019t touch them, but save them afterwards. Continue?')) return;
-              install.disabled = true;
-              try {
-                await installUpdate(result.kitRepo, result.latest, (text) => { status.textContent = text; });
-                show(h('p', { class: 'adm-status is-ok', text: `Updated to version ${result.latest.build}. The live site updates in a minute or two; reload the page then to use the new version of this panel too.` }));
-              } catch (error) {
-                err.textContent = error.message;
-                status.textContent = '';
-                install.disabled = false;
-              }
-            },
-          });
-          show(
-            h('p', { text: `Version ${result.latest.build} is available${result.installed.build ? ` (you have version ${result.installed.build})` : ''}.` }),
-            result.notes.length ? h('ul', { class: 'adm-notes' }, result.notes.map((n) => h('li', null, h('strong', { text: `${n.build}` }), ` ${n.message}`))) : null,
-            h('p', { class: 'adm-hint', text: 'Updating replaces the site\u2019s code with the new version. Your content, pictures, files and translations stay as they are.' }),
-            status, err, install);
         }
       },
     });
-    show(h('p', { class: 'adm-hint', text: 'New features and fixes for the site\u2019s design and this panel.' }), check);
+    if (state.updateInfo) showResult(state.updateInfo);
+    else show(h('p', { class: 'adm-hint', text: 'New features and fixes for the site\u2019s design and this panel.' }), check);
     return h('div', { class: 'adm-form adm-group-box', 'data-adm-section': 'updates' }, h('h3', { class: 'adm-group', text: 'Updates' }), body);
+  }
+
+  // ---------- Update notice ----------
+  // On unlocking, the panel checks the kit in the background (once per session). A newer version puts a
+  // slim bar at the top of the editor; clicking it opens the Site tab at Updates, with the changes listed.
+  async function checkUpdatesInBackground() {
+    if (state.updateChecked) return;
+    state.updateChecked = true;
+    try {
+      const result = await checkForUpdates();
+      if (result.status !== 'available') return;
+      state.updateInfo = result;
+      const editor = screen && screen.querySelector('.adm-editor');
+      if (editor && !editor.querySelector('.adm-update-banner')) editor.querySelector('.adm-top').after(updateBanner());
+    } catch { /* offline or not readable: no notice, nothing else changes */ }
+  }
+
+  function updateBanner() {
+    const info = state.updateInfo;
+    if (!info) return null;
+    const changes = info.notes.length;
+    return h('button', {
+      class: 'adm-update-banner',
+      type: 'button',
+      onclick: () => {
+        state.tab = 'site';
+        showEditor();
+        const box = screen.querySelector('[data-adm-section="updates"]');
+        if (!box) return;
+        box.scrollIntoView({ block: 'start' });
+        box.classList.add('adm-flash');
+        setTimeout(() => box.classList.remove('adm-flash'), 1200);
+      },
+    },
+    h('span', { class: 'adm-update-dot', 'aria-hidden': 'true' }),
+    h('span', { text: `Version ${info.latest.build} is available${changes ? `: ${changes} change${changes === 1 ? '' : 's'}` : ''}.` }),
+    h('strong', { text: 'See what\u2019s new' }));
   }
 
   const formatSize = (bytes) => (bytes >= MB ? `${(bytes / MB).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
@@ -1547,6 +1597,7 @@
           windowButtons(),
           h('button', { class: 'adm-close', type: 'button', 'aria-label': 'Minimise admin', title: 'Minimise', text: '–', onclick: minimise }),
           closeButton())),
+      updateBanner(),
       statusEl,
       languagePicker(),
       tabs,
@@ -3010,6 +3061,14 @@
   function stampContentFile(html, content) {
     const stamp = content.savedAt ? `?v=${encodeURIComponent(content.savedAt)}` : '';
     return html.replace(/(<script src="content\/site\.js)[^"]*(")/, (match, before, after) => before + stamp + after);
+  }
+
+  // After an update, index.html loads the code as css/style.css?v=<version>, js/main.js?v=<version>…,
+  // so browsers fetch the new code instead of reusing old copies (main.js passes the same version on
+  // to the admin panel's own files)
+  function stampCodeFiles(html, version) {
+    const stamp = version ? `?v=${encodeURIComponent(version)}` : '';
+    return html.replace(/((?:src|href)=")((?:css|js)\/[\w-]+\.(?:css|js))(?:\?v=[^"]*)?(")/g, (match, before, path, after) => before + path + stamp + after);
   }
 
   // The latest save, kept in this browser so a reload shows it even before the host has published it

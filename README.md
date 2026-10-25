@@ -407,14 +407,23 @@ and write** on portfolio-kit only, and add it as an Actions secret named `KIT_TO
 (Settings → Secrets and variables → Actions). The Action can also be run by hand from the Actions
 tab (**Run workflow**).
 
-**How a site updates.** Site tab → **Updates** → **Check for updates** compares the site's
+**How a site updates.** When the admin panel is unlocked, it checks portfolio-kit in the background;
+if there's a newer version, a bar at the top of the panel says so ("Version 10 is available: 3
+changes"), and clicking it opens the Site tab at **Updates** with the changes listed. The same check
+can be run by hand: Site tab → **Updates** → **Check for updates** compares the site's
 `kit.json` with portfolio-kit's and lists what changed. **Update** copies the code files from the
 kit into the site's repository in one commit; the site's content, uploads, translations and
 settings stay as they are, and `index.html` gets the site's own title, icon and theme written back
-in. Reading the kit needs no extra permission (it's public), and the site's own token is enough
+in, and its code files are loaded with the new version number (`js/main.js?v=10`…) so browsers
+fetch the new code right away. Reading the kit needs no extra permission (it's public), and the site's own token is enough
 to install. On the source site itself, the box says that it publishes the kit instead.
 
 When adding a new code file, add it to `files` in `kit.json` so it's published and installed too.
+
+An update changes the site's repository on GitHub, not a copy on someone's computer: a local
+preview (for example VS Code's Live Server) shows the new version only after pulling (GitHub
+Desktop: **Fetch origin**, then **Pull origin**). Pull before editing files locally, so an old copy
+doesn't undo the update.
 
 ## Making a copy for someone else
 
