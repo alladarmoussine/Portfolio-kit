@@ -73,17 +73,55 @@ browser's site data, just set it up again.
 - **Page:** the page as an outline, from the top section to the footer. Click a row to edit
   that section right there; the page behind scrolls to it. Drag ⠿ (or use the arrows) to change
   the order, and use the eye to show or hide a section. Every section's editor starts with the
-  same settings: title, menu label, "show in the menu", background, and title style and size
-  (*large* with a dot, or *small* with an accent line). A small-titled section on the same
-  background as the one above sits right under it as part of it: that's how Experience and
-  Toolkit follow Work. Below that come the section's own content and ticks for its parts
-  (e.g. the About photo, or the contact form).
-- **Adding sections:** **+ Add section** adds a **Text** section (title, text, picture below or
-  beside it, a button) or a **Work grid**. Each Work section shows the projects from the
-  categories ticked under "Projects shown here" (nothing ticked: all of them), with its own intro,
-  highlights slider and filter buttons; projects are edited inside the Work section they show up
-  in. Built-in sections (About, Showreel, Work, Experience, Toolkit, Contact) can be taken off
-  with **Remove from the page**; their content is kept and **+ Add section** puts them back.
+  same settings: title, menu label, "show in the menu" and a **link name** (e.g. `services`, so
+  the section's address ends in `#services` instead of its code name). Folded under them,
+  **Look and layout**: background (page, second, or your own colour or picture, with the text
+  turning light or dark to read on it), title style and size (*large* with a dot, or *small*
+  with an accent line), width (narrow, normal, wide, full), space around (compact, normal,
+  roomy) and **Show on** (all screens, computers only, phones only; its menu link follows). A
+  small-titled section on the same background as the one above sits right under it as part of
+  it: that's how Experience and Toolkit follow Work. Below that come the section's own content
+  and ticks for its parts (e.g. the About photo, or the contact form).
+- **Layout:** sections with more than one arrangement show little drawings to pick from (also
+  under ▦ in the section's bar on the page): About with the photo right, left or above; Showreel
+  and Video with the video below or beside the title; Contact with the form below or beside;
+  Work with cards fitting the screen or 2, 3 or 4 per row; Testimonials side by side or one big
+  quote per row; a Text section's picture below, above, right or left. Stored as
+  `sections.<id>.layout` (a Text section: its `imagePlace`).
+- **Parts:** a section's title, intro, text, video, list… can be put in another order and each
+  aligned (left, centre, right), given more or less space above, or made narrower. In **Look and
+  layout** under **Parts**, or on the page: open the section, hover a part, and use the column of
+  controls on its left (drag ⠿ to move it). **Reset parts** puts them back. Stored as
+  `sections.<id>.blockOrder` and `blockLook`; an untouched section stores nothing, and on
+  phones the parts stay one under the other.
+- **Adding sections:** **+ Add section** offers:
+  - **Text:** title, text with simple formatting (the B, I, Link and List buttons write
+    `**bold**`, `*italic*`, `[label](https://…)` and `- ` lists), one or two columns, left or
+    centred, a picture below or beside it, and any number of buttons (filled or outline).
+  - **Gallery:** pictures in a grid (square, landscape or their own shape, 2–5 per row) with
+    optional captions; clicking one opens it big, with arrows through the rest.
+  - **Video:** one video from YouTube, an uploaded file or a direct link, with a caption.
+  - **Testimonials:** quotes with a name, role and small photo.
+  - **Logos:** client logos, in colour, grey until pointed at, or all white or all black.
+  - **Numbers:** a few big figures (120+ videos edited).
+  - **FAQ:** questions that open to show their answer.
+  - **Call to action:** one big line, a line under it, and buttons.
+  - **Work grid:** each Work section shows the projects from the categories ticked under
+    "Projects shown here" (nothing ticked: all of them), with its own intro, highlights slider
+    and filter buttons.
+
+  The entries in Testimonials, Logos, Numbers and FAQ fold to one line each; drag ⠿ to move
+  them, ⧉ duplicates one. **Duplicate section** copies an added section right under it. Built-in
+  sections (About, Showreel, Work, Experience, Toolkit, Contact) can be taken off with **Remove
+  from the page**; their content is kept and **+ Add section** puts them back.
+- **Projects:** edited inside the Work section they show up in, or all together under **All
+  projects** at the top of the Page tab (with a category filter). Drag ⠿ to reorder, search
+  when there are more than four, ⧉ to duplicate, and **+ Add a project at the end** below the
+  list. A project ticked **Draft** only shows while the panel is open (marked "Draft"), not on
+  the live site or in the top-section monitor.
+- **Undo / redo (↶ ↷):** in the top bar, or Ctrl+Z and Ctrl+Shift+Z (Ctrl+Y) when you're not in
+  a text box. Each click is a step, typing a step per pause; up to 100 steps, until the panel
+  closes. Text boxes keep the browser's own undo for what's typed in them.
 - **Site:** your name, page title and description, the link preview picture and site address, the browser-tab icon (letters in your theme
   colours, or upload your own square PNG, SVG or .ico), the languages, the GitHub repository, your
   email and social links (and which ones are in the footer), and analytics.
@@ -99,19 +137,36 @@ browser's site data, just set it up again.
   the same name form one family, each with its weight and style (stored as `theme.customFonts`).
 - **Removing things:** the eye hides a whole section, and the ticks in a section's editor hide its
   parts. Nothing is deleted; show it again to bring it back. Menu links pointing to a hidden
-  section are hidden too. Stored as `hidden` in `content/site.js`. When editing on the page,
-  **Hide** takes that part off and **Delete** removes a project, experience entry or toolkit row.
-  An emptied text disappears from the page instead of leaving a gap.
+  section are hidden too. Stored as `hidden` in `content/site.js`. While the panel is open,
+  hidden sections stay on the page, faded, so they can be shown again from there.
+  An emptied text disappears from the live page instead of leaving a gap (while editing it
+  shows "Empty: click to write").
 - **Videos:** paste a YouTube link (recommended), upload a video file (up to 50 MB), or
   paste a direct URL to a video hosted on your own storage/CDN for anything bigger or
   that can't go on YouTube (see "Video file size" under Work cards below). YouTube
   cards use YouTube's own thumbnail unless you upload one.
-- **Edit on the page:** while the panel is open, hovering an item shows a ✎ button. Press
-  it to unlock that item's text and type on the page: the top section, the section intro
-  lines, work card titles and teasers, the About bio and skills, experience entries and
-  toolkit rows. **Done**, Enter, Esc or clicking elsewhere locks it again; **More…** opens
-  all its options in the panel (videos, thumbnails, descriptions, buttons). On the
-  showreel, the photo and the social/email links, ✎ goes straight to the panel.
+- **Edit on the page:** while the panel is open, the page is an editor too:
+  - **Text:** click any text to type in it: your name, section titles, intros, project titles
+    and teasers, the bio and skills, timeline and toolkit entries, and the text of the added
+    sections. Enter finishes, Esc puts back what was there, clicking elsewhere finishes. In a
+    bio paragraph Enter starts the next paragraph. Text with formatting (Text sections, FAQ
+    answers, quotes) shows as typed, with its `**`, while you edit it; Enter is a new line, an
+    empty line a new paragraph, and Ctrl+Enter finishes. The page doesn't redraw while you
+    type, so nothing gets lost.
+  - **Sections:** hover one for its bar: move it up or down, hide it, duplicate it, delete it,
+    or ⚙ to open it in the panel. **+ Add section** on a section's top edge adds a new one
+    right there.
+  - **Lists:** hover a project, timeline entry, toolkit row, skill, paragraph, quote, number,
+    question, picture or logo for a small bar: move it, duplicate it, delete it (projects also
+    have **Draft**). **+ Add …** at the end of each list adds one and puts you straight into
+    typing it.
+  - **Page and panel follow each other:** clicking in a section opens its row in the panel (and
+    a project's form when you click a project), and the section open in the panel is outlined
+    on the page.
+  - The showreel, the photo and the social/email links have a ✎ that opens them in the panel.
+- **Preview (eye button in the top bar):** the page as visitors see it, without bars, outlines
+  or draft projects. The panel slides away; **Back to editing** at the bottom (or Esc, or the
+  Admin tab) brings everything back.
 - **Phone preview (📱):** shows the page at phone width in a frame beside the panel, with your
   unsaved changes, following every edit. Opening a section in the Page tab scrolls it there too.
 - **Detach (⧉) and full screen (⤢):** the buttons next to – turn the panel into a window you
@@ -339,7 +394,12 @@ All effects are in `js/main.js`, and all respect the visitor's "reduce motion" s
   becomes a circle saying "View", or "Play" for projects with videos; the words are interface
   text, so they're translated), **Spotlight** (the normal pointer with a soft accent glow following
   it; size, strength, colour) or **Your own pointer** (an uploaded PNG/SVG, any size, centred or
-  pointing with its top-left corner). **Magnetic buttons** can be added to any of them. Only on
+  pointing with its top-left corner). Your own pointer can also be a **cursor file**: `.cur`,
+  animated `.ani` (Windows), or a file from a Linux cursor theme (Xcursor, e.g. `left_ptr` from
+  the theme's `cursors` folder). Browsers can't show these, so the panel reads the file when it's
+  uploaded and saves its frames side by side in one PNG, with each frame's time and the pixel
+  that points (`theme.cursor.frames`); the page plays the frames at their own speed and points
+  with that pixel ("Where the cursor file says"). **Magnetic buttons** can be added to any of them. Only on
   mouse or trackpad devices; touch devices and visitors who reduce motion keep the normal pointer.
 - **Editing timeline and preview monitor:** the strip at the bottom of the top section
   (`#hero-timeline`). Its V1 track has one clip per uploaded video in Work (featured projects

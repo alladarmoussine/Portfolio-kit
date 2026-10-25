@@ -70,6 +70,7 @@
 .adm-path em { color: var(--accent-orange); font-style: normal; }
 
 .adm-root input[type="text"],
+.adm-root input[type="search"],
 .adm-root input[type="url"],
 .adm-root input[type="email"],
 .adm-root input[type="password"],
@@ -301,31 +302,273 @@
   .adm-root { transition: none; }
 }
 
-/* Editing on the page: items get a pencil on hover; pressing it unlocks that item's text (.adm-active) */
+/* ---------- Editing on the page ----------
+   Text to click and type in, a bar on each section, a small bar on items in lists, and "+ Add" tiles.
+   html.adm-editing: the panel is open; html.adm-previewing: Preview, which hides all of it. */
 /* (The About photo is positioned already; making it relative would pull it out of place) */
-.adm-editing [data-edit-item]:not(.about-photo) { position: relative; }
+.adm-editing [data-edit-item]:not(.about-photo),
+.adm-editing [data-adm-row],
+.adm-editing [data-entry] { position: relative; }
 
-.adm-active {
-  border-radius: 6px;
-  outline: 2px dashed var(--accent);
-  outline-offset: 8px;
+.adm-previewing :is(.adm-pencil, .adm-section-bar, .adm-insert, .adm-item-bar, .adm-add-tile, .adm-edge) { display: none !important; }
+
+/* Bars use the panel's look, whatever the text around them looks like */
+:is(.adm-section-bar, .adm-item-bar, .adm-insert, .adm-add-tile, .adm-typing-hint, .adm-preview-pill) {
+  font-family: "Geologica", "Segoe UI", system-ui, sans-serif;
+  font-size: 0.85rem;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.4;
+  letter-spacing: normal;
+  text-transform: none;
+  text-align: left;
+  white-space: nowrap;
 }
 
-.adm-active[data-field],
-.adm-active [data-field] {
-  border-radius: 4px;
+/* Text that can be typed in: an outline on hover */
+.adm-editing:not(.adm-previewing) [data-field]:not(.adm-typing):hover {
+  outline: 1px dashed color-mix(in srgb, var(--accent) 75%, transparent);
+  outline-offset: 4px;
+  border-radius: 3px;
   cursor: text;
 }
 
-.adm-active [data-field]:hover { outline: 1px dashed var(--text-dim); outline-offset: 3px; }
-
-.adm-active[data-field]:focus,
-.adm-active [data-field]:focus {
-  outline: 2px solid var(--accent-orange);
-  outline-offset: 3px;
+/* The text being typed in */
+.adm-typing {
+  outline: 2px solid var(--accent-orange) !important;
+  outline-offset: 4px;
+  border-radius: 3px;
+  cursor: text;
 }
 
-/* Pencils sit on the left, where the open panel doesn't cover them (over the image on work cards and the reel) */
+.adm-typing[data-rich] { white-space: pre-wrap; color: var(--text); }
+.work-card:has(.adm-typing),
+.work-card:has(.adm-typing):hover { transform: none; }
+
+/* Emptied text stays clickable while editing, so it can be filled in again */
+.adm-editing:not(.adm-previewing) [data-field].is-empty:not([hidden]):not(.is-removed) { display: block !important; min-height: 1.4em; }
+.adm-editing:not(.adm-previewing) [data-field].is-empty:empty::before {
+  content: "Empty: click to write";
+  color: var(--text-dim);
+  font-style: italic;
+  opacity: 0.7;
+}
+
+/* Hidden sections stay in view, faded, so they can be shown again from the page */
+.adm-editing:not(.adm-previewing) main > section.is-removed:not(.is-off-page),
+.adm-editing:not(.adm-previewing) .site-footer.is-removed { display: block !important; opacity: 0.35; }
+.adm-editing:not(.adm-previewing) .about.is-removed:not(.is-off-page) { display: flex !important; }
+.adm-editing:not(.adm-previewing) [data-adm-row].is-removed:hover { opacity: 0.7; }
+
+/* The section open in the panel */
+.adm-editing:not(.adm-previewing) .adm-selected { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Buttons in the bars */
+.adm-bar-btn,
+.adm-bar-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.adm-bar-btn:hover:not(:disabled),
+.adm-bar-name:hover { border-color: var(--border); background: var(--surface); }
+.adm-bar-btn:disabled { opacity: 0.3; cursor: default; }
+.adm-bar-btn.is-danger:hover { color: #ff8a8d; border-color: #e5484d; }
+.adm-bar-btn[aria-pressed="true"]:not(:has(svg)) { background: var(--accent-orange); color: #fff; }
+.adm-section-bar .adm-bar-btn[aria-pressed="false"]:has(svg) { color: var(--accent-orange); }
+.adm-block-bar .adm-bar-btn[aria-pressed="true"] { background: transparent; color: var(--accent-orange); }
+.adm-bar-name { font-weight: 700; }
+
+.adm-bar-btn svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Section bar: top left of the section (the docked panel covers the right), on hover or while open in the panel */
+.adm-section-bar,
+.adm-item-bar {
+  position: absolute;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-alt);
+  color: var(--text);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.15s ease, visibility 0s linear 0.2s;
+}
+
+.adm-section-bar { top: 12px; left: 12px; }
+
+[data-adm-row]:hover > .adm-section-bar,
+.adm-selected > .adm-section-bar,
+[data-entry]:hover > .adm-item-bar {
+  visibility: visible;
+  opacity: 1;
+  transition-delay: 0s;
+}
+
+/* Item bar: just above the item (over the picture on cards) */
+.adm-item-bar { bottom: 100%; left: 0; padding: 2px; z-index: 31; }
+.adm-item-bar .adm-bar-btn { min-width: 26px; height: 26px; padding: 0 6px; }
+.work-card > .adm-item-bar,
+.quote-card > .adm-item-bar,
+.gallery-item > .adm-item-bar { top: 8px; left: 8px; bottom: auto; }
+
+/* "+ Add section" on a section's top edge (and the last one's bottom edge) */
+.adm-insert {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 29;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.adm-insert.is-below { top: auto; bottom: 0; }
+
+.adm-insert-btn {
+  margin-top: -1px;
+  padding: 4px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 0 0 10px 10px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font: inherit;
+  font-weight: 700;
+  pointer-events: auto;
+  cursor: pointer;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.15s ease, visibility 0s linear 0.2s;
+}
+
+.adm-insert.is-below .adm-insert-btn { border-radius: 10px 10px 0 0; margin: 0 0 -1px; align-self: flex-end; }
+[data-adm-row]:hover > .adm-insert .adm-insert-btn,
+.adm-insert:has(.adm-insert-menu:not([hidden])) .adm-insert-btn { visibility: visible; opacity: 1; transition-delay: 0s; }
+
+.adm-insert-menu {
+  position: absolute;
+  top: 34px;
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-alt);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+}
+
+.adm-insert.is-below .adm-insert-menu { top: auto; bottom: 34px; }
+.adm-insert-menu[hidden] { display: none; }
+.adm-insert-menu .adm-bar-btn { justify-content: flex-start; }
+
+/* "+ Add" at the end of a list */
+.adm-add-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 56px;
+  list-style: none;
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  opacity: 0.7;
+}
+
+.adm-add-tile:hover { opacity: 1; border-color: var(--accent); }
+
+.adm-add-tile button {
+  width: 100%;
+  height: 100%;
+  min-height: inherit;
+  padding: 8px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* Small lists (skills, logos): a small tile; long ones (timeline, paragraphs, questions): a slim one */
+.skills > .adm-add-tile,
+.logo-row > .adm-add-tile { display: inline-flex; min-height: 0; border-width: 1px; border-radius: 999px; }
+.skills > .adm-add-tile button,
+.logo-row > .adm-add-tile button { padding: 2px 12px; }
+.timeline > .adm-add-tile,
+#about-bio > .adm-add-tile,
+.toolkit > .adm-add-tile,
+.faq-list > .adm-add-tile { min-height: 40px; margin-top: 12px; }
+.work-grid > .adm-add-tile { min-height: 180px; }
+
+/* Which keys do what, under the text being typed */
+.adm-typing-hint {
+  position: absolute;
+  z-index: 40;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+/* Preview: a pill at the bottom to get back to editing */
+.adm-preview-pill {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  z-index: 950;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-alt);
+  color: var(--text);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  translate: -50% 0;
+  cursor: pointer;
+}
+
+.adm-preview-pill strong { color: var(--accent); }
+.adm-preview-pill:hover strong { color: var(--accent-orange); }
+.adm-preview-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-orange); }
+
+/* Touch screens have no hover: the open section's bar shows, item bars stay visible */
+@media (hover: none) {
+  .adm-item-bar { visibility: visible; opacity: 0.9; }
+}
+
+/* ✎ for things without text to type (showreel, photo, links): on the left, where the open panel doesn't cover them */
 .adm-pencil {
   position: absolute;
   top: 10px;
@@ -349,62 +592,23 @@
 [data-edit-item]:focus-within > .adm-pencil,
 .adm-pencil:focus-visible { opacity: 1; }
 
-.adm-active > .adm-pencil { display: none; }
-
 .adm-pencil:hover { background: #fff; color: var(--bg); transform: scale(1.08); }
 
-/* Text items: pencil above the top-right corner, off the text */
-.hero-text > .adm-pencil,
-.section-intro > .adm-pencil,
-.about-text > .adm-pencil,
-.timeline-item > .adm-pencil,
-.toolkit-row > .adm-pencil,
+/* Links: pencil above the top-right corner, off the icons */
 .footer-links > .adm-pencil,
 .contact-socials > .adm-pencil,
 .contact-alt > .adm-pencil { top: -38px; left: auto; right: 0; }
 
-/* Wide screens: put them in the left margin instead, since the right side can be under the panel */
+/* Wide screens: in the left margin instead, since the right side can be under the panel */
 @media (min-width: 1100px) {
-  .hero-text > .adm-pencil,
-  .section-intro > .adm-pencil,
-  .about-text > .adm-pencil,
   .contact-socials > .adm-pencil,
   .contact-alt > .adm-pencil { top: 0; left: -50px; right: auto; }
-  .timeline-item > .adm-pencil { top: 24px; left: -50px; right: auto; }
-  .toolkit-row > .adm-pencil,
   .footer-links > .adm-pencil { top: 50%; left: -48px; right: auto; margin-top: -17px; }
 }
 
-/* Touch screens have no hover, so keep pencils visible */
 @media (hover: none) {
   .adm-pencil { opacity: 0.9; }
 }
-
-/* Done / More… buttons, floating just above the item being edited */
-.adm-inline-bar {
-  position: absolute;
-  bottom: calc(100% + 12px);
-  left: 0;
-  z-index: 4;
-  display: flex;
-  gap: 6px;
-  padding: 5px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg-alt);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-  font-family: "Geologica", "Segoe UI", system-ui, sans-serif;
-  font-size: 1rem;
-  font-weight: 400;
-  letter-spacing: normal;
-  text-transform: none;
-  line-height: 1.5;
-}
-
-/* Work cards clip overflow, so the buttons go inside, over the image; and the card stops tilting while edited */
-.work-card > .adm-inline-bar { top: 10px; bottom: auto; left: 10px; }
-.work-card.adm-active,
-.work-card.adm-active:hover { transform: none; }
 
 .adm-group { margin: 6px 0 0; font-size: 1rem; font-weight: 800; }
 
@@ -515,9 +719,11 @@
 .adm-outline-row { margin-bottom: 0; transition: opacity 0.15s ease; }
 .adm-outline-row.is-fixed { border-style: dashed; }
 .adm-outline-row.is-hidden > .adm-entry-head .adm-entry-title { opacity: 0.45; }
-.adm-outline-row.is-dragging { opacity: 0.4; }
-.adm-outline-row.drop-before { box-shadow: 0 -3px 0 var(--accent); }
-.adm-outline-row.drop-after { box-shadow: 0 3px 0 var(--accent); }
+.adm-root .is-dragging { opacity: 0.4; }
+.adm-entry.drop-before { box-shadow: 0 -3px 0 var(--accent); }
+.adm-entry.drop-after { box-shadow: 0 3px 0 var(--accent); }
+.adm-picture.drop-before { box-shadow: -4px 0 0 var(--accent); }
+.adm-picture.drop-after { box-shadow: 4px 0 0 var(--accent); }
 .adm-outline-row.is-open { border-color: var(--accent); }
 
 .adm-handle {
@@ -547,7 +753,7 @@
 .adm-eye[aria-pressed="false"] { color: var(--accent-orange); }
 
 .adm-row-body { display: grid; gap: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
-.adm-row-foot { display: flex; justify-content: flex-end; }
+.adm-row-foot { display: flex; justify-content: flex-end; gap: 8px; }
 
 .adm-add {
   display: grid;
@@ -731,6 +937,17 @@
 /* Mouse effect: the uploaded pointer image */
 .adm-cursor-preview { width: 32px; height: 32px; object-fit: contain; flex: none; }
 
+/* An animated pointer from a cursor file, playing */
+.adm-cursor-anim {
+  display: inline-block;
+  height: calc(32px * var(--ratio, 1));
+  background-repeat: no-repeat;
+  background-size: calc(var(--frames) * 32px) 100%;
+  animation: adm-cursor-frames var(--duration, 1s) steps(var(--frames)) infinite;
+}
+
+@keyframes adm-cursor-frames { to { background-position-x: calc(var(--frames) * -32px); } }
+
 /* Update notice: a slim bar under the top bar when the kit has a newer version */
 .adm-update-banner {
   display: flex;
@@ -752,3 +969,182 @@
 .adm-update-banner strong { margin-left: auto; color: var(--accent); white-space: nowrap; }
 .adm-update-banner:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
 .adm-update-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-orange); }
+
+/* Undo and redo in the top bar */
+.adm-undo,
+.adm-redo { font-size: 1.05rem; }
+.adm-undo:disabled,
+.adm-redo:disabled { opacity: 0.3; cursor: default; }
+.adm-undo:disabled:hover,
+.adm-redo:disabled:hover { border-color: var(--border); color: var(--text); }
+
+/* Lists of entries (projects, quotes, logos…): drag handle, folded rows */
+.adm-entry-list { display: grid; }
+.adm-entry-list > .adm-entry[hidden] { display: none; }
+.adm-entry.is-draft > .adm-entry-head .adm-entry-title { opacity: 0.6; }
+.adm-entry-head > .adm-handle { align-self: center; }
+.adm-narrow { width: auto !important; }
+
+/* "+ Add section": a card per kind of section */
+.adm-add-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+
+.adm-add-card {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.adm-add-card strong { font-size: 0.88rem; }
+.adm-add-card span { color: var(--text-dim); font-size: 0.78rem; line-height: 1.35; }
+.adm-add-card:hover { border-color: var(--accent-orange); }
+
+/* "Look and layout": folded under a section's settings */
+.adm-more > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; margin: 0; }
+.adm-more > summary::-webkit-details-marker { display: none; }
+.adm-more > summary::before { content: "\25B8"; color: var(--text-dim); transition: transform 0.15s ease; }
+.adm-more[open] > summary::before { transform: rotate(90deg); }
+.adm-more[open] > summary { margin-bottom: 14px; }
+
+/* Text boxes with formatting buttons */
+.adm-rich { display: grid; }
+.adm-rich textarea { border-top-left-radius: 0; border-top-right-radius: 0; }
+
+.adm-tools {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: var(--bg);
+}
+
+.adm-tool {
+  min-width: 30px;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.adm-tool:hover { border-color: var(--border); background: var(--surface); }
+.adm-tool[title="Bold"] { font-weight: 800; }
+.adm-tool[title="Italic"] { font-style: italic; }
+
+/* A button: label, link, style and its controls on one row */
+.adm-button-row { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 6px; align-items: center; }
+.adm-button-row select { width: auto; }
+
+@media (max-width: 480px) {
+  .adm-button-row { grid-template-columns: 1fr 1fr; }
+}
+
+/* A selected picture's description, caption and controls */
+.adm-picture-tools .adm-form { gap: 6px; }
+
+/* Layouts: little drawings to pick from (panel, and ▦ in a section's bar) */
+.adm-layouts { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+
+.adm-layout {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 8px 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  text-align: center;
+  white-space: normal;
+  cursor: pointer;
+}
+
+.adm-layout svg { width: 56px; height: 37px; }
+.adm-layout rect.is-t { fill: currentColor; opacity: 0.55; }
+.adm-layout rect.is-p { fill: var(--accent); opacity: 0.85; }
+.adm-layout rect.is-b { fill: none; stroke: currentColor; stroke-width: 1; opacity: 0.7; }
+.adm-layout:hover { border-color: var(--accent-orange); color: var(--text); }
+.adm-layout.is-active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); color: var(--text); }
+
+.adm-bar-pop { position: relative; display: flex; }
+.adm-bar-pop > .adm-layout-menu { top: 34px; left: 0; display: block; width: 330px; }
+.adm-bar-pop > .adm-layout-menu[hidden] { display: none; }
+
+/* Parts (Look and layout): one row per part */
+.adm-part-row { display: grid; grid-template-columns: minmax(90px, 1fr) auto auto auto auto; align-items: center; gap: 6px; }
+.adm-part-row select { width: auto; padding: 5px 6px; font-size: 0.8rem; }
+.adm-part-name { font-size: 0.85rem; font-weight: 700; }
+
+@media (max-width: 520px) {
+  .adm-part-row { grid-template-columns: 1fr auto; }
+}
+
+/* Parts on the page: a column of controls on the left of each part of the section open in the panel */
+.adm-editing [data-block] { position: relative; }
+
+.adm-block-bar {
+  position: absolute;
+  top: 0;
+  right: calc(100% + 10px);
+  z-index: 32;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-alt);
+  color: var(--text);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  font-family: "Geologica", "Segoe UI", system-ui, sans-serif;
+  font-size: 0.85rem;
+  font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: normal;
+  text-transform: none;
+  text-align: left;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.15s ease, visibility 0s linear 0.2s;
+}
+
+.adm-block-bar .adm-bar-btn { min-width: 26px; height: 26px; padding: 0; }
+.adm-block-handle { cursor: grab; user-select: none; }
+[data-block]:hover > .adm-block-bar { visibility: visible; opacity: 1; transition-delay: 0s; }
+.adm-editing:not(.adm-previewing) .adm-selected [data-block]:hover { outline: 1px dotted color-mix(in srgb, var(--accent-orange) 70%, transparent); outline-offset: 6px; }
+.adm-previewing .adm-block-bar { display: none !important; }
+
+/* Not much room on the left: the column goes inside the part instead */
+@media (max-width: 1240px) {
+  .adm-block-bar { right: auto; left: 4px; top: 4px; }
+}
+
+/* Dragging a part: where it goes */
+.adm-editing [data-block].is-dragging { opacity: 0.4; }
+.adm-editing [data-block].drop-before { box-shadow: 0 -4px 0 var(--accent-orange); }
+.adm-editing [data-block].drop-after { box-shadow: 0 4px 0 var(--accent-orange); }
+
+/* Nothing in the panel moves when a line of text changes:
+   the status line stays one line (errors may wrap: they need reading), */
+.adm-status:not(.is-error) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* a row's or project's header stays one line whatever its badges say, */
+.adm-entry-title { overflow: hidden; }
+.adm-entry-title > span:not(.adm-badge) { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.adm-entry-title .adm-badge { white-space: nowrap; }
+/* and the update notice sits at the bottom of the panel instead of pushing everything down when it arrives */
+.adm-editor > .adm-update-banner { position: sticky; bottom: 12px; z-index: 3; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); background: color-mix(in srgb, var(--accent) 22%, var(--bg-alt)); }

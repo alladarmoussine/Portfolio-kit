@@ -573,11 +573,13 @@ function renderGrid(g, entries, settings) {
 
   // Every project as an equal card, in content order (featured ones also get a slide above)
   g.cards.innerHTML = '';
+  g.cards.dataset.entries = 'work';
   entries.forEach(({ item, index }) => {
-    const card = el('article', 'work-card');
+    const card = el('article', item.draft ? 'work-card is-draft' : 'work-card');
     card.dataset.type = categoryOf(item.type).id;
     card.dataset.index = index;
     card.dataset.editItem = `work.${index}`;
+    card.dataset.entry = `work.${index}`;
     card.tabIndex = 0;
     card.setAttribute('role', 'button');
     card.setAttribute('aria-haspopup', 'dialog');
@@ -653,11 +655,15 @@ function renderExtraGrids(list) {
   });
 }
 
+// Draft projects stay off the live site; while the admin panel is open (and not previewing) they show, marked
+const isEditing = () => document.documentElement.classList.contains('adm-editing') && !document.documentElement.classList.contains('adm-previewing');
+const showDrafts = isEditing;
+
 // All grids on the page get their projects
 function renderGrids(content) {
   const work = content.work || [];
   const sections = content.sections || {};
-  const entries = work.map((item, index) => ({ item, index }));
+  const entries = work.map((item, index) => ({ item, index })).filter(({ item }) => !item.draft || showDrafts());
   document.querySelectorAll('main > section.work').forEach((section) => {
     if (!grids.has(section.id)) grids.set(section.id, createGrid(section));
     const allowed = ((sections[section.id] || {}).categories || []).filter((id) => categories.some((c) => c.id === id));
@@ -683,10 +689,23 @@ function renderAbout(about) {
   const bio = document.getElementById('about-bio');
   bio.parentElement.dataset.editItem = 'about';
   bio.innerHTML = '';
-  (about.paragraphs || []).forEach((text, i) => { if (text && text.trim()) bio.appendChild(field(el('p', null, text), `about.paragraphs.${i}`)); });
+  // Lists the admin panel can change on the page (data-entries; data-axis="y": one under the other)
+  Object.assign(bio.dataset, { entries: 'about.paragraphs', axis: 'y' });
+  (about.paragraphs || []).forEach((text, i) => {
+    // An empty paragraph only shows while editing, to be typed in
+    if (!(text && text.trim()) && !isEditing()) return;
+    const p = field(el('p', text && text.trim() ? null : 'is-empty', text), `about.paragraphs.${i}`);
+    p.dataset.entry = `about.paragraphs.${i}`;
+    bio.appendChild(p);
+  });
   const skills = document.getElementById('about-skills');
   skills.innerHTML = '';
-  (about.skills || []).forEach((skill, i) => skills.appendChild(field(el('span', 'skill-tag', skill), `about.skills.${i}`)));
+  skills.dataset.entries = 'about.skills';
+  (about.skills || []).forEach((skill, i) => {
+    const tag = field(el('span', 'skill-tag', skill), `about.skills.${i}`);
+    tag.dataset.entry = `about.skills.${i}`;
+    skills.appendChild(tag);
+  });
   // No photo set: the text takes the full width (same as hiding the photo)
   const photo = document.getElementById('about-photo-img');
   if (about.photo) photo.src = assetUrl(about.photo);
@@ -696,9 +715,11 @@ function renderAbout(about) {
 function renderExperience(entries) {
   const timeline = document.getElementById('timeline');
   timeline.innerHTML = '';
+  Object.assign(timeline.dataset, { entries: 'experience', axis: 'y' });
   entries.forEach((entry, i) => {
     const li = el('li', 'timeline-item');
     li.dataset.editItem = `experience.${i}`;
+    li.dataset.entry = `experience.${i}`;
     const h3 = el('h3');
     h3.appendChild(field(el('span', null, entry.role), `experience.${i}.role`));
     if (entry.org) {
@@ -718,9 +739,11 @@ function renderExperience(entries) {
 function renderToolkit(rows) {
   const toolkit = document.getElementById('toolkit-list');
   toolkit.innerHTML = '';
+  Object.assign(toolkit.dataset, { entries: 'toolkit', axis: 'y' });
   rows.forEach((row, i) => {
     const wrap = el('div', 'toolkit-row');
     wrap.dataset.editItem = `toolkit.${i}`;
+    wrap.dataset.entry = `toolkit.${i}`;
     const dd = el('dd');
     (row.tools || []).forEach((tool, j) => dd.appendChild(field(el('span', 'skill-tag', tool), `toolkit.${i}.tools.${j}`)));
     wrap.append(field(el('dt', null, row.label), `toolkit.${i}.label`), dd);
@@ -891,7 +914,7 @@ let currentReel = -1;
 
 // Uploaded videos from Work, featured projects first (YouTube can't play in the monitor)
 function reelFromWork(items) {
-  const ordered = items.map((item, index) => ({ item, index }));
+  const ordered = items.map((item, index) => ({ item, index })).filter(({ item }) => !item.draft);
   if (heroSettings.monitorOrder === 'featured') {
     ordered.sort((a, b) => Number(Boolean(b.item.featured)) - Number(Boolean(a.item.featured)));
   }
@@ -1125,7 +1148,8 @@ function applyRemovedParts(hidden) {
   const off = hidden || {};
   document.querySelectorAll('[data-part]').forEach((node) => node.classList.toggle('is-removed', Boolean(off[node.dataset.part])));
   document.querySelectorAll('a[href^="#"]').forEach((link) => {
-    const target = link.getAttribute('href').length > 1 && document.getElementById(link.getAttribute('href').slice(1));
+    const name = hashName(link.getAttribute('href'));
+    const target = name && (document.getElementById(name) || document.getElementById(anchorTargets[name] || ''));
     link.classList.toggle('is-removed', Boolean(target && target.closest('.is-removed')));
   });
 }
@@ -1253,9 +1277,12 @@ function applyTheme(theme) {
 window.SiteTheme = { presets: THEME_PRESETS, fonts: THEME_FONTS, colors: themeColors, css: themeCss, fontsHref: themeFontsHref, favicon: faviconHref };
 
 // ---------- Mouse effect (admin: Theme tab) ----------
-// content.theme.cursor = { style, size, color, grow, image, tip, glowSize, glowStrength, glowColor, magnetic }
+// content.theme.cursor = { style, size, color, grow, image, tip, glowSize, glowStrength, glowColor, magnetic, frames }
 // style: "off" (normal pointer), "dot", "label" (a dot that says View / Play over projects), "spotlight"
 // (normal pointer with a soft glow following it) or "image" (an uploaded picture as the pointer).
+// A pointer from a cursor file (.cur, .ani, Xcursor) is saved as a strip of frames side by side, with
+// frames = { count, width, height, delays (ms per frame), hotX, hotY (the pixel that points) }, and
+// tip "hotspot" to point with that pixel. The frames play here, at their own speed.
 // Only for a mouse or trackpad, and not for visitors who reduce motion: they keep the normal pointer.
 const CURSOR_DEFAULTS = {
   style: 'dot', size: 14, color: 'invert', grow: true, image: '', tip: 'center',
@@ -1271,6 +1298,7 @@ let cursorEl = null;
 let cursorLabel = null;
 let glowEl = null;
 let magnetTarget = null;
+let cursorTimer = 0;
 
 // Dot, label and picture are drawn by the page (the real pointer is hidden); with a picture style
 // but no picture yet, it's a dot
@@ -1366,10 +1394,36 @@ function applyCursor(settings) {
   const size = Math.min(Math.max(Number(cursorSet.size) || 14, 6), shape === 'image' ? 128 : 40);
   cursorEl.style.setProperty('--cursor-size', `${size}px`);
   cursorEl.style.backgroundImage = picture ? `url("${cssString(picture)}")` : '';
+  playCursorFrames(shape === 'image' ? cursorSet.frames : null);
   if (cursorSet.style !== 'label') cursorEl.classList.remove('is-label');
   glowEl.style.setProperty('--glow-size', `${Math.min(Math.max(Number(cursorSet.glowSize) || 320, 100), 800)}px`);
   glowEl.style.setProperty('--glow-strength', `${Math.min(Math.max(Number(cursorSet.glowStrength) || 18, 2), 60)}%`);
   glowEl.style.setProperty('--glow-color', cursorSet.glowColor === 'accent2' ? 'var(--accent-orange)' : 'var(--accent)');
+}
+
+// A pointer made of frames: its shape, the pixel that points, and the frames one after another
+function playCursorFrames(frames) {
+  clearTimeout(cursorTimer);
+  const ok = frames && frames.width > 0 && frames.height > 0;
+  const count = ok ? Math.min(Math.max(Math.round(Number(frames.count)) || 1, 1), 400) : 1;
+  const hot = ok && Number.isFinite(frames.hotX) && Number.isFinite(frames.hotY);
+  cursorEl.classList.toggle('is-sprite', ok);
+  cursorEl.style.setProperty('--frames', String(count));
+  cursorEl.style.setProperty('--cursor-ratio', String(ok ? frames.height / frames.width : 1));
+  cursorEl.style.setProperty('--hot-x', String(hot ? frames.hotX / frames.width : 0.5));
+  cursorEl.style.setProperty('--hot-y', String(hot ? frames.hotY / frames.height : 0.5));
+  if (cursorEl.dataset.tip === 'hotspot' && !hot) cursorEl.dataset.tip = 'center';
+  cursorEl.style.setProperty('--frame', '0');
+  if (count < 2) return;
+  const delays = Array.isArray(frames.delays) ? frames.delays : [];
+  let frame = 0;
+  const next = () => {
+    cursorEl.style.setProperty('--frame', String(frame));
+    const wait = Math.min(Math.max(Number(delays[frame]) || 100, 16), 10000);
+    frame = (frame + 1) % count;
+    cursorTimer = setTimeout(next, wait);
+  };
+  next();
 }
 
 // ---------- Your name and site details (admin: Site tab) ----------
@@ -1379,6 +1433,7 @@ function renderIdentity(site, theme) {
   firstName = (site.shortName || '').trim() || words[0];
   const heading = document.querySelector('[data-site="name"]');
   if (heading.getAttribute('aria-label') !== siteName) setRevealText(heading, siteName);
+  field(heading, 'site.name');
   // Logo: first word plain, the rest in the accent colour
   const logo = document.querySelector('[data-site="logo"]');
   logo.textContent = words[0];
@@ -1391,10 +1446,15 @@ function renderIdentity(site, theme) {
 // ---------- Sections: order, titles, menu and look (admin: Page tab) ----------
 // content.sections = {
 //   order: [ids], removed: [ids of built-in sections taken off the page],
-//   <id>: { title, nav, inMenu, background ("main" | "alt"), titleStyle ("large" | "small"), titleSize (%), categories },
+//   <id>: { title, nav, inMenu, background ("main" | "alt" | "custom"), bgColor, bgImage, bgDarken (%),
+//           titleStyle ("large" | "small"), titleSize (%), width ("narrow" | "normal" | "wide" | "full"),
+//           spacing ("compact" | "normal" | "roomy"), device ("all" | "desktop" | "phone"),
+//           anchor (the name in its link, e.g. "services" for #services), categories },
 // }
-// Sections: the built-in ones below, extra Work grids (content.workGrids) and Text sections (content.customSections).
+// Sections: the built-in ones below, extra Work grids (content.workGrids) and added sections
+// (content.customSections: Text, Gallery, Video and the other types in SECTION_TYPES).
 const BUILTIN_SECTIONS = ['about', 'reel', 'work', 'experience', 'toolkit', 'contact'];
+const SECTION_TYPES = ['text', 'gallery', 'video', 'quotes', 'logos', 'numbers', 'faq', 'cta'];
 // What a section looks like when its settings don't say (Experience and Toolkit sit under Work with small titles)
 const SECTION_LOOK = {
   about: { background: 'alt', titleStyle: 'large', inMenu: true },
@@ -1405,7 +1465,31 @@ const SECTION_LOOK = {
   contact: { background: 'main', titleStyle: 'large', inMenu: true },
   grid: { background: 'alt', titleStyle: 'large', inMenu: true },
   text: { background: 'main', titleStyle: 'large', inMenu: true },
+  gallery: { background: 'alt', titleStyle: 'large', inMenu: true },
+  video: { background: 'main', titleStyle: 'large', inMenu: true },
+  quotes: { background: 'alt', titleStyle: 'small', inMenu: false },
+  logos: { background: 'main', titleStyle: 'small', inMenu: false },
+  numbers: { background: 'main', titleStyle: 'small', inMenu: false },
+  faq: { background: 'alt', titleStyle: 'large', inMenu: true },
+  cta: { background: 'alt', titleStyle: 'small', inMenu: false },
 };
+const SECTION_CHOICES = {
+  width: ['normal', 'narrow', 'wide', 'full'],
+  spacing: ['normal', 'compact', 'roomy'],
+  device: ['all', 'desktop', 'phone'],
+};
+// Layouts a section can switch between (content.sections.<id>.layout; the first is the standard one).
+// A Text section's picture place is its own setting (imagePlace: below, above, side = right, side-left).
+const SECTION_LAYOUTS = {
+  about: ['photo-right', 'photo-left', 'photo-above'],
+  reel: ['stacked', 'side'],
+  video: ['stacked', 'side'],
+  contact: ['stacked', 'side'],
+  work: ['auto', 'cols-2', 'cols-3', 'cols-4'],
+  grid: ['auto', 'cols-2', 'cols-3', 'cols-4'],
+  quotes: ['cards', 'large'],
+};
+window.SECTION_LAYOUTS = SECTION_LAYOUTS;
 // content.sections.<name>.title / .nav replace these interface texts (empty keeps the default)
 const SECTION_TEXT = {
   about: { title: 'about.title', nav: 'nav.about' },
@@ -1420,7 +1504,8 @@ const SECTION_TEXT = {
 function sectionKind(content, id) {
   if (BUILTIN_SECTIONS.includes(id)) return id;
   if ((content.workGrids || []).some((g) => g.id === id)) return 'grid';
-  return 'text';
+  const added = (content.customSections || []).find((s) => s.id === id);
+  return added && SECTION_TYPES.includes(added.type) ? added.type : 'text';
 }
 
 // A section's settings with the defaults for its kind filled in
@@ -1428,15 +1513,55 @@ function sectionSettings(content, id) {
   const kind = sectionKind(content, id);
   const look = SECTION_LOOK[kind] || SECTION_LOOK.text;
   const own = (content.sections || {})[id] || {};
+  const pick = (key) => (SECTION_CHOICES[key].includes(own[key]) ? own[key] : SECTION_CHOICES[key][0]);
   return {
     ...own,
     kind,
-    background: own.background === 'main' || own.background === 'alt' ? own.background : look.background,
+    background: ['main', 'alt', 'custom'].includes(own.background) ? own.background : look.background,
     titleStyle: own.titleStyle === 'large' || own.titleStyle === 'small' ? own.titleStyle : look.titleStyle,
     titleSize: Math.min(Math.max(Number(own.titleSize) || 100, 40), 200),
     inMenu: typeof own.inMenu === 'boolean' ? own.inMenu : look.inMenu,
+    width: pick('width'),
+    spacing: pick('spacing'),
+    device: pick('device'),
+    bgDarken: Math.min(Math.max(Number.isFinite(Number(own.bgDarken)) ? Number(own.bgDarken) : 50, 0), 90),
+    layout: SECTION_LAYOUTS[kind] ? (SECTION_LAYOUTS[kind].includes(own.layout) ? own.layout : SECTION_LAYOUTS[kind][0]) : '',
   };
 }
+
+// Custom link names (content.sections.<id>.anchor) -> section id. A name that's taken (by another
+// section, or anything else on the page) is ignored, and the section keeps its own id as its link.
+let anchorTargets = {};
+
+// "#services" -> "services" (a malformed address stays as it is)
+function hashName(hash) {
+  const name = String(hash || '').replace(/^#/, '');
+  try { return decodeURIComponent(name); } catch { return name; }
+}
+
+function sectionLink(content, id) {
+  const own = String(sectionSettings(content, id).anchor || '').trim().toLowerCase();
+  if (!/^[a-z][a-z0-9-]{0,40}$/.test(own) || own === id || document.getElementById(own) || (anchorTargets[own] && anchorTargets[own] !== id)) return id;
+  anchorTargets[own] = id;
+  return own;
+}
+
+// A link to a custom name scrolls to its section (the browser can't: no element has that id)
+function scrollToAnchor(name, smooth) {
+  const section = anchorTargets[name] && document.getElementById(anchorTargets[name]);
+  if (!section) return false;
+  section.scrollIntoView({ behavior: smooth ? 'auto' : 'instant', block: 'start' });
+  return true;
+}
+
+document.addEventListener('click', (e) => {
+  const link = e.target.closest && e.target.closest('a[href^="#"]');
+  const name = link && hashName(link.getAttribute('href'));
+  if (!name || !scrollToAnchor(name, true)) return;
+  e.preventDefault();
+  history.pushState(null, '', `#${name}`);
+});
+window.addEventListener('hashchange', () => scrollToAnchor(hashName(window.location.hash), true));
 
 // Sections on the page, top to bottom. Built-in sections that aren't in the saved order (and weren't
 // removed) are added where they belong, so content saved before they existed still shows them.
@@ -1476,10 +1601,222 @@ function setSectionTitle(heading, text) {
   if (revealReady) heading.classList.add('is-in');
 }
 
-// ---------- Text sections ----------
-// content.customSections = [{ id, text, image, imageAlt, imagePlace, button: { label, url } }]; the title,
-// menu label and look are in content.sections.<id> like every other section.
-// text: paragraphs separated by an empty line. imagePlace: "below" or "side".
+// ---------- Added sections ----------
+// content.customSections = [{ id, type, intro, align ("left" | "center"), ... }]; the title, menu label and
+// look are in content.sections.<id> like every other section. What each type holds:
+//   text:    text, columns (1 | 2), image, imageAlt, imagePlace ("below" | "side"), buttons
+//   gallery: images [{ src, alt, caption }], columns (2-5), shape ("square" | "wide" | "natural")
+//   video:   youtube (an id), or video (a file or link) with thumb (its cover picture); caption
+//   quotes:  items [{ quote, name, role, photo }]
+//   logos:   items [{ src, alt, url }], style ("color" | "grey" | "white" | "black")
+//   numbers: items [{ value, label }]
+//   faq:     items [{ q, a }]
+//   cta:     text (one big line), sub, buttons
+// buttons = [{ label, url, style ("primary" | "ghost") }]. Text sections from before had one "button".
+
+// Simple formatting in text typed in the admin panel: **bold**, *italic*, [label](link), and blocks whose
+// lines all start with "- " become a list. Paragraphs are separated by an empty line. Built as elements,
+// never as HTML, so nothing typed can run as code.
+function inlineText(parent, text) {
+  const pattern = /\*\*([^*]+)\*\*|\*([^*\s][^*]*)\*|\[([^\]]+)\]\(([^)\s]+)\)/g;
+  let last = 0;
+  let match;
+  while ((match = pattern.exec(text))) {
+    if (match.index > last) parent.appendChild(document.createTextNode(text.slice(last, match.index)));
+    if (match[1]) parent.appendChild(el('strong', null, match[1]));
+    else if (match[2]) parent.appendChild(el('em', null, match[2]));
+    else {
+      const url = safeUrl(match[4]);
+      const link = url ? el('a', 'text-link', match[3]) : document.createTextNode(match[3]);
+      if (url) {
+        link.href = url;
+        if (/^https?:/i.test(url)) { link.target = '_blank'; link.rel = 'noopener'; }
+      }
+      parent.appendChild(link);
+    }
+    last = pattern.lastIndex;
+  }
+  if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+  return parent;
+}
+
+// path: where the text is in the content, so the admin panel can edit it on the page (as typed, with the **)
+function richText(text, className, path) {
+  const box = el('div', className ? `rich-text ${className}` : 'rich-text');
+  if (path) {
+    field(box, path);
+    box.dataset.rich = '';
+    box.classList.toggle('is-empty', !String(text || '').trim());
+  }
+  String(text || '').split(/\n\s*\n/).map((block) => block.trim()).filter(Boolean).forEach((block) => {
+    const lines = block.split('\n');
+    if (lines.every((line) => /^\s*[-•]\s+/.test(line))) {
+      const list = el('ul');
+      lines.forEach((line) => list.appendChild(inlineText(el('li'), line.replace(/^\s*[-•]\s+/, ''))));
+      box.appendChild(list);
+    } else {
+      box.appendChild(inlineText(el('p'), block));
+    }
+  });
+  return box;
+}
+
+function sectionButtons(sec) {
+  const list = Array.isArray(sec.buttons) ? sec.buttons : sec.button ? [sec.button] : [];
+  const row = el('div', 'custom-buttons');
+  list.forEach((button, n) => {
+    const label = button && (button.label || '').trim();
+    const url = button && safeUrl((button.url || '').trim());
+    if (!label || !url) return;
+    const style = button.style === 'ghost' || (!button.style && n > 0) ? 'btn-ghost' : 'btn-primary';
+    const link = el('a', `btn ${style}`, label);
+    link.href = url;
+    if (/^https?:/i.test(url)) { link.target = '_blank'; link.rel = 'noopener'; }
+    row.appendChild(link);
+  });
+  return row.children.length ? row : null;
+}
+
+function picture(src, alt, className) {
+  const img = el('img', className);
+  img.src = assetUrl(src);
+  img.alt = alt || '';
+  img.loading = 'lazy';
+  return img;
+}
+
+// What goes under a section's title, per type. path: the section's place in the content, for editing on the page.
+const SECTION_BODIES = {
+  text(sec, path) {
+    return [richText(sec.text, Number(sec.columns) === 2 ? 'is-two-columns' : '', `${path}.text`), sectionButtons(sec)];
+  },
+
+  gallery(sec, path, title) {
+    const images = (sec.images || []).filter((img) => img && img.src);
+    const grid = el('div', `gallery-grid shape-${['wide', 'natural'].includes(sec.shape) ? sec.shape : 'square'}`);
+    grid.dataset.entries = `${path}.images`;
+    grid.style.setProperty('--cols', String(Math.min(Math.max(Number(sec.columns) || 3, 2), 5)));
+    images.forEach((img, n) => {
+      const figure = el('figure', 'gallery-item');
+      figure.dataset.entry = `${path}.images.${sec.images.indexOf(img)}`;
+      const open = el('button', 'gallery-open');
+      open.type = 'button';
+      open.setAttribute('aria-label', img.alt || img.caption || t('work.pictureN').replace('{n}', n + 1));
+      open.appendChild(picture(img.src, img.alt));
+      open.addEventListener('click', () => { if (!open.closest('.adm-active')) openPictures(images, n, title, open); });
+      figure.appendChild(open);
+      const index = sec.images.indexOf(img);
+      if (img.caption) figure.appendChild(field(el('figcaption', null, img.caption), `${path}.images.${index}.caption`));
+      grid.appendChild(figure);
+    });
+    return [images.length ? grid : null];
+  },
+
+  video(sec, path, title) {
+    const frame = el('div', 'reel-frame');
+    const file = sec.video && safeUrl(sec.video) ? assetUrl(sec.video) : '';
+    if (sec.youtube) {
+      const iframe = youtubeEmbed(sec.youtube, title || t('reel.title'), false);
+      iframe.loading = 'lazy';
+      frame.appendChild(iframe);
+    } else if (file) {
+      const video = document.createElement('video');
+      video.src = file;
+      video.controls = true;
+      video.playsInline = true;
+      video.preload = 'metadata';
+      if (sec.thumb) video.poster = assetUrl(sec.thumb);
+      frame.appendChild(video);
+    } else {
+      frame.innerHTML = reelPlaceholder;
+      applyUiText(frame);
+    }
+    return [frame, sec.caption ? field(el('p', 'video-caption', sec.caption), `${path}.caption`) : null];
+  },
+
+  quotes(sec, path) {
+    const grid = el('div', 'quote-grid');
+    grid.dataset.entries = `${path}.items`;
+    (sec.items || []).forEach((item, n) => {
+      if (!item || !(item.quote || '').trim()) return;
+      const card = el('figure', 'quote-card');
+      card.dataset.entry = `${path}.items.${n}`;
+      const quote = el('blockquote');
+      quote.appendChild(richText(item.quote, '', `${path}.items.${n}.quote`));
+      const who = el('figcaption', 'quote-person');
+      if (item.photo) who.appendChild(picture(item.photo, '', 'quote-photo'));
+      const names = el('span', 'quote-names');
+      if (item.name) names.appendChild(field(el('strong', null, item.name), `${path}.items.${n}.name`));
+      if (item.role) names.appendChild(field(el('span', null, item.role), `${path}.items.${n}.role`));
+      who.appendChild(names);
+      card.append(quote, who);
+      grid.appendChild(card);
+    });
+    return [grid.children.length ? grid : null];
+  },
+
+  logos(sec, path) {
+    const style = ['color', 'white', 'black'].includes(sec.style) ? sec.style : 'grey';
+    const row = el('div', `logo-row logos-${style}`);
+    row.dataset.entries = `${path}.items`;
+    (sec.items || []).forEach((item, n) => {
+      if (!item || !item.src) return;
+      const url = item.url && safeUrl(item.url.trim());
+      const wrap = url ? el('a', 'logo-item') : el('span', 'logo-item');
+      wrap.dataset.entry = `${path}.items.${n}`;
+      if (url) { wrap.href = url; wrap.target = '_blank'; wrap.rel = 'noopener'; }
+      wrap.appendChild(picture(item.src, item.alt));
+      row.appendChild(wrap);
+    });
+    return [row.children.length ? row : null];
+  },
+
+  numbers(sec, path) {
+    const grid = el('div', 'number-grid');
+    grid.dataset.entries = `${path}.items`;
+    (sec.items || []).forEach((item, n) => {
+      if (!item || !((item.value || '').trim() || (item.label || '').trim())) return;
+      const box = el('div', 'number-item');
+      box.dataset.entry = `${path}.items.${n}`;
+      box.append(field(el('strong', 'number-value', item.value), `${path}.items.${n}.value`),
+        field(el('span', 'number-label', item.label), `${path}.items.${n}.label`));
+      grid.appendChild(box);
+    });
+    return [grid.children.length ? grid : null];
+  },
+
+  faq(sec, path) {
+    const list = el('div', 'faq-list');
+    Object.assign(list.dataset, { entries: `${path}.items`, axis: 'y' });
+    (sec.items || []).forEach((item, n) => {
+      if (!item || !(item.q || '').trim()) return;
+      const entry = el('details', 'faq-item');
+      entry.dataset.entry = `${path}.items.${n}`;
+      // Open while editing, so the answer can be typed in
+      entry.open = isEditing();
+      const question = el('summary');
+      question.appendChild(field(el('span', null, item.q), `${path}.items.${n}.q`));
+      entry.append(question, richText(item.a, 'faq-answer', `${path}.items.${n}.a`));
+      list.appendChild(entry);
+    });
+    return [list.children.length ? list : null];
+  },
+
+  cta(sec, path) {
+    return [
+      sec.text ? field(el('p', 'cta-line', sec.text), `${path}.text`) : null,
+      sec.sub ? field(el('p', 'cta-sub', sec.sub), `${path}.sub`) : null,
+      sectionButtons(sec),
+    ];
+  },
+};
+
+// What a part of an added section is called (content.sections.<id>.blockOrder / blockLook use these names)
+const BLOCK_CLASSES = [['section-title', 'title'], ['section-sub', 'intro'], ['rich-text', 'text'], ['custom-buttons', 'buttons'],
+  ['custom-text', 'heading'], ['gallery-grid', 'gallery'], ['reel-frame', 'video'], ['video-caption', 'caption'], ['quote-grid', 'quotes'],
+  ['logo-row', 'logos'], ['number-grid', 'numbers'], ['faq-list', 'faq'], ['cta-line', 'line'], ['cta-sub', 'sub']];
+const blockName = (node) => (BLOCK_CLASSES.find(([cls]) => node.classList.contains(cls)) || [null, 'part'])[1];
+
 function renderCustomSections(content) {
   const list = Array.isArray(content.customSections) ? content.customSections : [];
   const main = document.getElementById('top');
@@ -1494,35 +1831,36 @@ function renderCustomSections(content) {
       node.id = sec.id;
       main.appendChild(node);
     }
-    const image = sec.image ? assetUrl(sec.image) : '';
-    node.classList.toggle('has-side-image', Boolean(image && sec.imagePlace === 'side'));
+    const type = SECTION_TYPES.includes(sec.type) ? sec.type : 'text';
+    const path = `customSections.${i}`;
+    SECTION_TYPES.forEach((name) => node.classList.toggle(`type-${name}`, name === type));
+    const image = type === 'text' && sec.image ? assetUrl(sec.image) : '';
+    const place = ['side', 'side-left', 'above'].includes(sec.imagePlace) ? sec.imagePlace : 'below';
+    node.classList.toggle('has-side-image', Boolean(image && place.startsWith('side')));
+    node.classList.toggle('image-left', Boolean(image && place === 'side-left'));
+    node.classList.toggle('image-above', Boolean(image && place === 'above'));
+    node.classList.toggle('is-centered', (sec.align || (type === 'cta' ? 'center' : 'left')) === 'center');
     node.dataset.part = sec.id;
-    node.dataset.editItem = `customSections.${i}`;
+    node.dataset.editItem = path;
 
     const title = (sectionSettings(content, sec.id).title || sec.title || '').trim();
     const heading = node.querySelector('.section-title') || el('h2', 'section-title reveal');
     setSectionTitle(heading, title);
-    const body = el('div', 'custom-body');
-    String(sec.text || '').split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean).forEach((p) => body.appendChild(el('p', null, p)));
-    const label = sec.button && sec.button.label && sec.button.label.trim();
-    const url = sec.button && safeUrl((sec.button.url || '').trim());
-    if (label && url) {
-      const btn = el('a', 'btn btn-primary', label);
-      btn.href = url;
-      if (/^https?:/i.test(url)) { btn.target = '_blank'; btn.rel = 'noopener'; }
-      body.appendChild(btn);
-    }
+    const intro = sec.intro && sec.intro.trim() ? field(el('p', 'section-sub', sec.intro), `${path}.intro`) : null;
+    const [first, ...rest] = SECTION_BODIES[type](sec, path, title).filter(Boolean);
     const inner = el('div', 'container custom-inner');
-    const text = el('div', 'custom-text');
-    text.append(...[title ? heading : null, body].filter(Boolean));
-    inner.appendChild(text);
+    const head = el('div', 'custom-text');
+    // A Text section's text and buttons sit in the same column as its title (beside a side picture)
+    head.append(...[title ? heading : null, intro, ...(type === 'text' ? [first, ...rest] : [])].filter(Boolean));
+    inner.appendChild(head);
+    if (type !== 'text') inner.append(...[first, ...rest].filter(Boolean));
+    // The parts that can be moved and adjusted (see applyBlocks): a Text section's are in its text column
+    const blocks = type === 'text' ? head : inner;
+    blocks.dataset.blocks = '';
+    [...blocks.children].forEach((child) => { child.dataset.block = blockName(child); });
     if (image) {
       const figure = el('figure', 'custom-image');
-      const img = el('img');
-      img.src = image;
-      img.alt = sec.imageAlt || '';
-      img.loading = 'lazy';
-      figure.appendChild(img);
+      figure.appendChild(picture(sec.image, sec.imageAlt));
       inner.appendChild(figure);
     }
     // Pencils from the admin panel live on the section itself, so keep them
@@ -1557,21 +1895,95 @@ function applySections(content) {
     if (section && main.lastElementChild !== section) main.appendChild(section);
   });
 
-  // The menu: one link per section that wants one, in page order
+  // Section titles can be typed in on the page (admin panel); empty keeps the standard title
+  order.forEach((id) => {
+    const heading = document.getElementById(id) && document.getElementById(id).querySelector('.section-title');
+    if (heading) field(heading, `sections.${id}.title`);
+  });
+  document.querySelectorAll('.featured .subsection-title').forEach((heading) => field(heading, 'sections.highlights.title'));
+
+  // The menu: one link per section that wants one, in page order (a section shown only on phones or only
+  // on computers has its menu link only there too)
   const nav = document.getElementById('main-nav');
   const langs = nav.querySelector('.nav-langs');
   nav.querySelectorAll(':scope > a').forEach((link) => link.remove());
+  anchorTargets = {};
   order.forEach((id) => {
+    const href = `#${sectionLink(content, id)}`;
     const text = sectionNavText(content, id);
-    if (!sectionSettings(content, id).inMenu || !text) return;
-    const link = el('a', null, text);
-    link.href = `#${id}`;
+    const set = sectionSettings(content, id);
+    if (!set.inMenu || !text) return;
+    const link = el('a', set.device === 'all' ? null : `only-${set.device}`, text);
+    link.href = href;
     nav.insertBefore(link, langs);
   });
 }
 
-// Background, title style and size of each section. A small-titled section on the same background as
-// the one above sits right under it, like a part of it (Experience and Toolkit under Work).
+// ---------- Blocks: the parts of a section ----------
+// Each section's parts (title, intro, text, video, list…) can be put in another order and adjusted
+// (admin panel: on the page, or Look and layout). content.sections.<id>:
+//   blockOrder: ["intro", "title", …] (parts not listed keep their place after these)
+//   blockLook: { title: { align: "left" | "center" | "right", space: -2…4 (steps of 20px above), width: "" | "medium" | "narrow" } }
+// Added sections name their parts in renderCustomSections; the built-in ones are found here.
+const BUILTIN_BLOCKS = {
+  about: ['.about-text', { title: '.section-title', bio: '#about-bio', skills: '.skills' }],
+  reel: [':scope > .container', { title: '.section-title', intro: '.section-intro', video: '.reel-frame' }],
+  work: [':scope > .container', { title: '.section-title', intro: '.section-intro', highlights: '.featured', filters: '.filter-bar', grid: '.work-grid' }],
+  experience: [':scope > .container', { title: '.section-title', list: '.timeline' }],
+  toolkit: [':scope > .container', { title: '.section-title', list: '.toolkit' }],
+  contact: ['.contact-inner', { title: '.section-title', intro: '.section-intro', formtitle: '.subsection-title', form: '.contact-form', alt: '.contact-alt' }],
+};
+BUILTIN_BLOCKS.grid = BUILTIN_BLOCKS.work;
+const BLOCK_SPACE = 20;
+
+function applyBlocks(content) {
+  sectionOrder(content).forEach((id) => {
+    const section = document.getElementById(id);
+    if (!section) return;
+    const set = sectionSettings(content, id);
+    const builtin = BUILTIN_BLOCKS[set.kind];
+    if (builtin && !section.classList.contains('custom-section')) {
+      const container = section.querySelector(builtin[0]);
+      if (!container) return;
+      container.dataset.blocks = '';
+      Object.entries(builtin[1]).forEach(([name, selector]) => {
+        const node = container.querySelector(`:scope > ${selector}`);
+        if (node) node.dataset.block = name;
+      });
+    }
+    const order = Array.isArray(set.blockOrder) ? set.blockOrder : [];
+    const looks = set.blockLook && typeof set.blockLook === 'object' ? set.blockLook : {};
+    section.querySelectorAll('[data-blocks]').forEach((container) => {
+      const blocks = [...container.children].filter((child) => child.dataset.block);
+      const names = blocks.map((b) => b.dataset.block);
+      const rank = (name) => (order.includes(name) ? order.indexOf(name) : order.length + names.indexOf(name));
+      const moved = names.some((name, i) => i > 0 && rank(name) < rank(names[i - 1]));
+      const spaced = blocks.some((b) => Number((looks[b.dataset.block] || {}).space));
+      // Only rearranged (or spaced) parts become a column of their own; otherwise the page is as it was
+      container.classList.toggle('has-blocks', moved || spaced);
+      blocks.forEach((block) => {
+        const look = looks[block.dataset.block] || {};
+        block.style.order = moved ? String(rank(block.dataset.block)) : '';
+        ['left', 'center', 'right'].forEach((a) => block.classList.toggle(`align-${a}`, look.align === a));
+        ['medium', 'narrow'].forEach((w) => block.classList.toggle(`width-${w}`, look.width === w));
+        block.style.marginTop = '';
+        const space = Math.min(Math.max(Math.round(Number(look.space) || 0), -2), 4);
+        if (space) block.style.marginTop = `${Math.max(parseFloat(getComputedStyle(block).marginTop) + space * BLOCK_SPACE, 0)}px`;
+      });
+    });
+  });
+}
+
+// Light or dark text for a background colour ("#rrggbb")
+function isLightColor(hex) {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return false;
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.55;
+}
+
+// Background, title style and size, width, spacing and devices of each section. A small-titled section on
+// the same background as the one above sits right under it, like a part of it (Experience and Toolkit under Work).
 function applySectionLook(content) {
   let previous = null;
   let first = true;
@@ -1579,12 +1991,29 @@ function applySectionLook(content) {
     const section = document.getElementById(id);
     if (!section) return;
     const set = sectionSettings(content, id);
+    const custom = set.background === 'custom';
+    const image = custom && set.bgImage ? assetUrl(set.bgImage) : '';
     section.classList.toggle('bg-main', set.background === 'main');
     section.classList.toggle('bg-alt', set.background === 'alt');
+    section.classList.toggle('bg-custom', custom);
+    // Text on a picture is light (the picture is darkened); on a colour, whatever reads on it
+    section.classList.toggle('tone-light', custom && (Boolean(image) || !isLightColor(set.bgColor)));
+    section.classList.toggle('tone-dark', custom && !image && isLightColor(set.bgColor));
+    section.style.backgroundColor = custom && /^#[0-9a-f]{6}$/i.test(set.bgColor || '') ? set.bgColor : '';
+    const shade = `rgba(0, 0, 0, ${set.bgDarken / 100})`;
+    section.style.backgroundImage = image ? `linear-gradient(${shade}, ${shade}), url("${cssString(image)}")` : '';
     section.classList.toggle('title-small', set.titleStyle === 'small');
     section.style.setProperty('--title-scale', String(set.titleSize / 100));
+    SECTION_CHOICES.width.forEach((w) => section.classList.toggle(`width-${w}`, w !== 'normal' && w === set.width));
+    SECTION_CHOICES.spacing.forEach((s) => section.classList.toggle(`space-${s}`, s !== 'normal' && s === set.spacing));
+    if (set.layout) section.dataset.layout = set.layout;
+    else delete section.dataset.layout;
+    section.classList.toggle('only-desktop', set.device === 'desktop');
+    section.classList.toggle('only-phone', set.device === 'phone');
     if (section.classList.contains('is-removed')) return;
-    section.classList.toggle('is-joined', Boolean(previous && set.titleStyle === 'small' && previous.background === set.background));
+    const sameBackground = previous && previous.background === set.background
+      && (!custom || (previous.bgColor === set.bgColor && !previous.bgImage && !set.bgImage));
+    section.classList.toggle('is-joined', Boolean(sameBackground && set.titleStyle === 'small'));
     section.classList.toggle('is-first', first);
     first = false;
     previous = set;
@@ -1632,6 +2061,7 @@ function renderSite(fullContent) {
   renderExperience(content.experience || []);
   renderToolkit(content.toolkit || []);
   applySectionLook(content);
+  applyBlocks(content);
   matchHeroFade();
 }
 
@@ -1692,6 +2122,10 @@ function showMedia(index) {
     img.src = assetUrl(entry.img.src);
     img.alt = entry.img.alt || modalItem.title || '';
     modalThumb.appendChild(img);
+    if (modalItem.isGallery) {
+      modalDesc.textContent = entry.img.caption || '';
+      modalDesc.hidden = !modalDesc.textContent;
+    }
   } else if (entry.clip.video) {
     const { clip } = entry;
     const video = document.createElement('video');
@@ -1774,10 +2208,14 @@ function openModal(card) {
   if (projectMedia(item).length) showMedia(0);
   else modalThumb.innerHTML = thumbSource.innerHTML;
 
+  modal.classList.remove('is-gallery');
+  modalTag.hidden = false;
   modalTag.textContent = typeLabel(item.type);
   modalTitle.textContent = item.title;
+  modalTitle.hidden = false;
   modalMeta.textContent = [item.client, item.year, item.role].filter(Boolean).join(' · ');
   modalMeta.hidden = !modalMeta.textContent;
+  modalDesc.hidden = false;
   modalDesc.textContent = item.desc || item.teaser;
 
   modalTools.innerHTML = '';
@@ -1795,6 +2233,25 @@ function openModal(card) {
   });
 
   lastFocusedCard = card;
+  modal.hidden = false;
+  document.body.style.overflow = 'hidden';
+  modalClose.focus();
+}
+
+// A Gallery section's pictures in the same pop-up, with its title and each picture's caption
+function openPictures(images, index, title, opener) {
+  modalItem = { title, images, videos: [], isGallery: true };
+  modal.classList.add('is-gallery');
+  modalThumb.className = 'modal-thumb';
+  modalTag.hidden = true;
+  modalTitle.textContent = title;
+  modalTitle.hidden = !title;
+  modalMeta.hidden = true;
+  modalTools.innerHTML = '';
+  modalLinks.innerHTML = '';
+  buildMediaPicker(modalItem);
+  showMedia(index);
+  lastFocusedCard = opener;
   modal.hidden = false;
   document.body.style.overflow = 'hidden';
   modalClose.focus();
@@ -1824,6 +2281,7 @@ document.addEventListener('keydown', (e) => {
 
 applyLanguage();
 renderSite(window.SITE_CONTENT || {});
+if (window.location.hash) scrollToAnchor(hashName(window.location.hash), false);
 if (pendingSave) showSaveNote(pendingSave.age);
 loadAnalytics((window.SITE_CONTENT || {}).analytics);
 

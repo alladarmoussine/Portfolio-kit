@@ -33,6 +33,8 @@
     openRow: null, // the section open in the Page tab
     openLang: null, // the language whose interface text is open in the Site tab
     openItem: null,
+    allProjects: false, // the Page tab shows every project instead of the outline
+    projectCategory: '', // ...of this category ('' = all)
     saving: false,
     failedAttempts: 0,
     cooldownUntil: 0,
@@ -232,8 +234,10 @@
       });
       const look = window.SiteSections.settings(c, id);
       c.sections[id] = {
-        title: '', nav: '', ...(c.sections[id] || {}),
+        title: '', nav: '', anchor: '', bgColor: '', bgImage: '', ...(c.sections[id] || {}),
         inMenu: look.inMenu, background: look.background, titleStyle: look.titleStyle, titleSize: look.titleSize,
+        width: look.width, spacing: look.spacing, device: look.device, bgDarken: look.bgDarken,
+        ...(look.layout ? { layout: look.layout } : {}),
       };
       if (look.kind === 'work' || look.kind === 'grid') c.sections[id].categories = c.sections[id].categories || [];
     });
@@ -266,12 +270,38 @@
     return c;
   }
 
-  // A Text section's content; its title, menu and look are in content.sections like every section's
-  const normalizeSection = (sec) => ({
-    text: '', image: '', imageAlt: '', imagePlace: 'below',
-    ...sec,
-    button: { label: '', url: '', ...((sec && sec.button) || {}) },
-  });
+  // An added section's content (see "Added sections" in js/main.js); its title, menu and look are in
+  // content.sections like every section's
+  const SECTION_FIELDS = {
+    text: { text: '', columns: 1, image: '', imageAlt: '', imagePlace: 'below', buttons: [] },
+    gallery: { columns: 3, shape: 'square', images: [] },
+    video: { youtube: '', video: '', thumb: '', caption: '' },
+    quotes: { items: [] },
+    logos: { style: 'grey', items: [] },
+    numbers: { items: [] },
+    faq: { items: [] },
+    cta: { text: '', sub: '', buttons: [] },
+  };
+  const ITEM_FIELDS = {
+    quotes: { quote: '', name: '', role: '', photo: '' },
+    logos: { src: '', alt: '', url: '' },
+    numbers: { value: '', label: '' },
+    faq: { q: '', a: '' },
+  };
+
+  function normalizeSection(sec) {
+    const type = SECTION_FIELDS[sec.type] ? sec.type : 'text';
+    const out = { intro: '', align: type === 'cta' ? 'center' : 'left', ...clone(SECTION_FIELDS[type]), ...sec, type };
+    // Text sections from before had a single button
+    if (sec.button) {
+      if (!Array.isArray(sec.buttons) && sec.button.label) out.buttons = [{ ...sec.button, style: 'primary' }];
+      delete out.button;
+    }
+    if (out.buttons) out.buttons = out.buttons.map((b, n) => ({ label: '', url: '', style: n ? 'ghost' : 'primary', ...b }));
+    if (out.items) out.items = out.items.map((item) => ({ ...ITEM_FIELDS[type], ...item }));
+    if (out.images) out.images = out.images.map((img) => ({ src: '', alt: '', caption: '', ...img }));
+    return out;
+  }
 
   // Always two link rows, so the form can bind to them; empty rows are dropped on save
   function normalizeWork(item) {
@@ -322,7 +352,8 @@
   // Any object can carry "i18n": { nl: {...}, fr: {...} } with the same text keys as its English.
   // While the site shows another language, the text fields below read and write that translation.
   const TRANSLATABLE = new Set(['role', 'intro', 'availability', 'reel', 'work', 'contact', 'paragraphs', 'skills',
-    'title', 'teaser', 'desc', 'thumbAlt', 'label', 'date', 'org', 'text', 'monitorLabel', 'nav', 'description']);
+    'title', 'teaser', 'desc', 'thumbAlt', 'label', 'date', 'org', 'text', 'monitorLabel', 'nav', 'description',
+    'quote', 'q', 'a', 'caption', 'sub']);
   const lang = () => (window.SiteI18n ? window.SiteI18n.lang : 'en');
   // The language the content is written in; other languages are saved as translations of it
   const mainLang = () => (state.draft && state.draft.languages ? state.draft.languages.main : (window.SiteI18n || {}).main || 'en');
@@ -363,13 +394,19 @@
     const paths = new Set([content.site.favicon, content.site.shareImage, content.resume, content.about.photo, content.hero.background, content.hero.backgroundVideo, content.hero.portrait]);
     content.theme.customFonts.forEach((f) => paths.add(f.file));
     paths.add(content.theme.cursor.image);
-    content.customSections.forEach((sec) => paths.add(sec.image));
+    content.customSections.forEach((sec) => {
+      [sec.image, sec.video, sec.thumb].forEach((path) => paths.add(path));
+      (sec.images || []).forEach((img) => paths.add(img.src));
+      (sec.items || []).forEach((item) => { paths.add(item.photo); paths.add(item.src); });
+    });
+    Object.values(content.sections).forEach((set) => paths.add(set && set.bgImage));
     content.work.forEach((item) => {
       paths.add(item.thumb);
       item.videos.forEach((clip) => { paths.add(clip.video); paths.add(clip.thumb); });
       item.images.forEach((img) => paths.add(img.src));
     });
     paths.delete('');
+    paths.delete(undefined);
     return paths;
   }
 
@@ -383,19 +420,201 @@
     }, 120);
   }
 
-  const changed = () => preview();
+  const changed = () => {
+    preview();
+    scheduleHistory();
+  };
+
+  // ---------- Undo / redo ----------
+  // Every change to the draft is kept as a step (typing counts as one step per pause; see also
+  // rerenderTab), up to 100 back.
+  // Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) outside text fields, or the arrows in the top bar. Text fields keep
+  // the browser's own undo for what's typed in them.
+  const HISTORY_STEPS = 100;
+  const history = { past: [], future: [], current: '' };
+  let historyTimer = 0;
+
+  function resetHistory() {
+    clearTimeout(historyTimer);
+    historyTimer = 0;
+    history.past = [];
+    history.future = [];
+    history.current = state.draft ? snapshot() : '';
+    updateHistoryButtons();
+  }
+
+  function scheduleHistory() {
+    clearTimeout(historyTimer);
+    historyTimer = setTimeout(recordHistory, 500);
+    updateHistoryButtons();
+  }
+
+  function recordHistory() {
+    clearTimeout(historyTimer);
+    historyTimer = 0;
+    if (!state.draft) return;
+    const now = snapshot();
+    if (now === history.current) { updateHistoryButtons(); return; }
+    history.past.push(history.current);
+    if (history.past.length > HISTORY_STEPS) history.past.shift();
+    history.current = now;
+    history.future = [];
+    updateHistoryButtons();
+  }
+
+  function stepHistory(from, to) {
+    stopEditing();
+    recordHistory(); // a change still waiting to be recorded is the step to undo
+    if (!from.length || !state.draft) return;
+    to.push(history.current);
+    history.current = from.pop();
+    state.draft = JSON.parse(history.current);
+    openPicture = null;
+    renderPage(state.draft);
+    if (screen && screen.querySelector('.adm-editor')) {
+      const anchor = panelAnchor();
+      showEditor();
+      restorePanelAnchor(anchor);
+    }
+    updateStatus();
+  }
+
+  const undo = () => stepHistory(history.past, history.future);
+  const redo = () => stepHistory(history.future, history.past);
+
+  function updateHistoryButtons() {
+    if (!screen) return;
+    screen.querySelectorAll('.adm-undo').forEach((btn) => { btn.disabled = !history.past.length && !historyTimer; });
+    screen.querySelectorAll('.adm-redo').forEach((btn) => { btn.disabled = !history.future.length; });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || !root || root.hidden || !screen.querySelector('.adm-editor')) return;
+    if (e.target.closest && e.target.closest('input, textarea, select, [contenteditable]')) return;
+    const key = e.key.toLowerCase();
+    if (key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+    else if ((key === 'z' && e.shiftKey) || key === 'y') { e.preventDefault(); redo(); }
+  });
 
   // ---------- Editing on the page ----------
-  // While a draft is open, every item tagged data-edit-item (in index.html and js/main.js) gets a pencil.
-  // Pressing it unlocks that item's text (tagged data-field) for typing on the page, with Done / More… buttons.
-  // Items with no text on the page (showreel, photo, links) open their form in the panel instead.
-  let activeItem = null;
+  // While the panel is open, the page behind is an editor too (Preview hides all of this):
+  // - Any text tagged data-field (index.html, js/main.js) can be clicked and typed in, one at a time. Enter
+  //   finishes (in a bio paragraph it starts the next one; in text with formatting it's a new line, and
+  //   Ctrl+Enter finishes), Esc puts back what was there, and clicking elsewhere finishes.
+  // - Each section gets a bar to move, hide, duplicate, delete it or open it in the panel, and a
+  //   "+ Add section" button on its top edge.
+  // - Items in lists (data-entries / data-entry: projects, timeline, quotes…) get a small bar to move,
+  //   duplicate or delete them, and each list a "+ Add" tile at its end.
+  // - Things without text to type (showreel, photo, links) keep a ✎ that opens them in the panel.
+  // - Page and panel follow each other: clicking in a section opens its row in the panel, and the row
+  //   open in the panel is outlined on the page.
+  // The page isn't redrawn while text is being typed in it (that would throw the typing away); it catches
+  // up as soon as the typing finishes.
+  let editing = null; // { node, path, rich, slot, stored, handlers }
+  let previewing = false;
 
   function renderPage(content) {
-    activeItem = null; // re-rendering replaces the page elements
+    if (editing) return; // stopEditing() redraws
+    const anchor = pageAnchor();
+    document.documentElement.classList.add('adm-editing'); // before rendering, so draft projects show
     window.renderSite(content);
     decoratePage();
+    restorePageAnchor(anchor);
     syncPhone();
+  }
+
+  // ---------- Nothing moves under you ----------
+  // A redraw rebuilds lists and adds or removes the editing extras (tiles, faded hidden sections, empty
+  // texts), and the browser can't keep the view still when what you're looking at is rebuilt. So before a
+  // redraw, note what's at the top of the view (by its name in the content, so it can be found again) and
+  // afterwards scroll so it's exactly where it was. The panel does the same for what was clicked in it.
+  // The names the page keeps whether the panel is open or not
+  const PAGE_KEYS = ['data-field', 'data-entry', 'data-block', 'id'];
+
+  function pageAnchor() {
+    if (window.scrollY < 2) return null; // at the very top: stay at the top
+    const line = Math.min(Math.round(window.innerHeight * 0.3), 280);
+    // The smallest named part crossing that line, else the nearest one below it, else its whole section
+    const parts = [...document.querySelectorAll('main [data-field], main [data-entry], main [data-block], main > section[id], .site-footer [data-field]')]
+      .filter((node) => !node.closest(CHROME) && node.getClientRects().length);
+    const boxes = parts.map((node) => [node, node.getBoundingClientRect(), node.matches('main > section')]);
+    const across = boxes.filter(([, box, whole]) => !whole && box.top <= line && box.bottom >= line).sort((a, b) => a[1].height - b[1].height)[0];
+    const below = boxes.filter(([, box, whole]) => !whole && box.top > line).sort((a, b) => a[1].top - b[1].top)[0];
+    const section = boxes.find(([, box, whole]) => whole && box.top <= line && box.bottom >= line);
+    const pick = across || below || section;
+    if (!pick) return null;
+    const [node, box] = pick;
+    const key = PAGE_KEYS.find((k) => node.hasAttribute(k));
+    const selector = `[${key}="${CSS.escape(node.getAttribute(key))}"]`;
+    return { selector, index: [...document.querySelectorAll(selector)].indexOf(node), top: box.top };
+  }
+
+  function restorePageAnchor(anchor) {
+    if (!anchor) return;
+    const node = document.querySelectorAll(anchor.selector)[Math.max(anchor.index, 0)];
+    if (!node || !node.getClientRects().length) return;
+    const delta = node.getBoundingClientRect().top - anchor.top;
+    if (Math.abs(delta) > 0.5) window.scrollBy({ top: delta, behavior: 'instant' });
+  }
+
+  // What was last clicked or focused in the panel: a redraw of the panel keeps it where it was
+  let panelTarget = null;
+
+  function panelInView(node) {
+    const box = node.getBoundingClientRect();
+    const view = root.getBoundingClientRect();
+    const top = (screen.querySelector('.adm-top') || root).getBoundingClientRect().bottom;
+    return box.bottom > top && box.top < view.bottom;
+  }
+
+  function panelAnchor() {
+    if (!screen || !state.draft) return null;
+    let node = panelTarget && screen.contains(panelTarget) && panelInView(panelTarget) ? panelTarget : null;
+    if (!node) {
+      const top = (screen.querySelector('.adm-top') || root).getBoundingClientRect().bottom;
+      node = [...screen.querySelectorAll('.adm-body .adm-outline-row, .adm-body .adm-entry, .adm-body .adm-group-box, .adm-body .adm-field')]
+        .find((n) => n.getBoundingClientRect().top >= top) || null;
+    }
+    if (!node) return null;
+    // Rows, projects and entries are found again by their names; inside one, by the way down to the node
+    const keyed = node.closest('[data-row], [data-index], [data-key]');
+    const chain = [];
+    for (let n = keyed; n && n !== screen; n = n.parentElement) {
+      const key = ['data-row', 'data-index', 'data-key'].find((k) => n.hasAttribute(k));
+      if (key) chain.unshift(`[${key}="${CSS.escape(n.getAttribute(key))}"]`);
+    }
+    const path = [];
+    for (let n = node; n && n !== (keyed || screen); n = n.parentElement) path.unshift([...n.parentElement.children].indexOf(n));
+    return { chain, path, top: node.getBoundingClientRect().top };
+  }
+
+  function restorePanelAnchor(anchor) {
+    if (!anchor) return;
+    let scope = screen;
+    anchor.chain.forEach((selector) => { scope = (scope && scope.querySelector(selector)) || scope; });
+    let node = scope;
+    anchor.path.forEach((i) => { node = (node && node.children[i]) || node; });
+    if (!node || node === screen) return;
+    const delta = node.getBoundingClientRect().top - anchor.top;
+    if (Math.abs(delta) > 0.5) root.scrollTop += delta;
+  }
+
+  // Redraws straight away (after a click on the page) instead of after the short pause typing gets
+  function renderNow() {
+    clearTimeout(previewTimer);
+    if (state.draft) renderPage(state.draft);
+    updateStatus();
+  }
+
+  // Moving a section or an entry: the page scrolls along with it, so it stays where it was on screen
+  // instead of its neighbour sliding into view. find() returns its element, before and after the move.
+  function keepInPlace(find, move) {
+    const before = find();
+    const top = before ? before.getBoundingClientRect().top : null;
+    move();
+    renderNow();
+    const after = find();
+    if (top !== null && after) window.scrollBy({ top: after.getBoundingClientRect().top - top, behavior: 'instant' });
   }
 
   // ---------- Phone preview ----------
@@ -441,145 +660,571 @@
     if (win.SiteI18n && win.SiteI18n.lang !== lang()) win.SiteI18n.setLanguage(lang());
   }
 
+  // While typing on the page, the phone preview follows after a short pause
+  let phoneTimer = 0;
+  const syncPhoneSoon = () => {
+    clearTimeout(phoneTimer);
+    phoneTimer = setTimeout(syncPhone, 300);
+  };
+
   const itemFields = (item) => [...(item.matches('[data-field]') ? [item] : []), ...item.querySelectorAll('[data-field]')];
+  // Everything the panel adds to the page
+  const CHROME = '.adm-pencil, .adm-section-bar, .adm-insert, .adm-item-bar, .adm-add-tile, .adm-block-bar';
+  const getPath = (path) => path.split('.').reduce((node, key) => (node == null ? node : node[key]), state.draft);
+  const sectionOf = (node) => {
+    const section = node.closest('[data-adm-row]');
+    return section ? section.dataset.admRow : null;
+  };
+
+  // A button in the bars on the page; clicks don't reach the page under it (a project would open)
+  function barBtn(label, title, onclick, opts = {}) {
+    const btn = h('button', {
+      class: `adm-bar-btn${opts.danger ? ' is-danger' : ''}`,
+      type: 'button',
+      title,
+      'aria-label': title,
+      disabled: opts.disabled,
+      'aria-pressed': opts.pressed == null ? null : String(opts.pressed),
+      onclick: (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onclick(e);
+      },
+    });
+    if (opts.html) btn.innerHTML = label;
+    else btn.textContent = label;
+    return btn;
+  }
 
   function decoratePage() {
     document.documentElement.classList.add('adm-editing');
+    document.querySelectorAll(CHROME).forEach((node) => node.remove());
+    // ✎ for things without text to type: their form in the panel
     document.querySelectorAll('[data-edit-item]').forEach((item) => {
-      if (item.querySelector(':scope > .adm-pencil')) return;
-      const inline = itemFields(item).length > 0;
-      const label = inline ? 'Edit on the page' : 'Edit in the admin panel';
+      if (item.matches('main > section') || itemFields(item).length) return;
       item.appendChild(h('button', {
         class: 'adm-pencil',
         type: 'button',
-        title: label,
-        'aria-label': label,
+        title: 'Edit in the admin panel',
+        'aria-label': 'Edit in the admin panel',
         text: '✎',
         onclick: (e) => {
           e.preventDefault();
           e.stopPropagation(); // don't open the project pop-up underneath
-          if (inline) startInline(item);
-          else editFromPage(item.dataset.editItem);
+          editFromPage(item.dataset.editItem);
         },
       }));
     });
+    // A bar on every section, and "+ Add section" above each one (and below the last)
+    const order = state.draft.sections.order;
+    [['hero', document.querySelector('.hero')], ...order.map((id) => [id, document.getElementById(id)]), ['footer', document.querySelector('.site-footer')]]
+      .forEach(([id, node]) => {
+        if (!node) return;
+        node.dataset.admRow = id;
+        node.appendChild(sectionBar(id));
+        const at = order.indexOf(id);
+        if (at >= 0) node.appendChild(insertLine(at));
+        if (at >= 0 && at === order.length - 1) node.appendChild(insertLine(order.length, true));
+      });
+    markSelected();
+    document.querySelectorAll('[data-entries]').forEach(decorateList);
   }
 
   function undecoratePage() {
-    stopInline();
-    document.documentElement.classList.remove('adm-editing');
-    document.querySelectorAll('.adm-pencil').forEach((pencil) => pencil.remove());
+    stopEditing();
+    previewing = false;
+    document.documentElement.classList.remove('adm-editing', 'adm-previewing');
+    document.querySelectorAll(`${CHROME}, .adm-preview-pill`).forEach((node) => node.remove());
+    document.querySelectorAll('[data-adm-row]').forEach((node) => {
+      node.classList.remove('adm-selected');
+      delete node.dataset.admRow;
+    });
   }
 
-  function startInline(item) {
-    stopInline();
-    activeItem = item;
-    item.classList.add('adm-active');
-    // While editing, clicks and keys inside the item stay there (a work card would otherwise open its pop-up)
-    item.addEventListener('click', swallow);
-    item.addEventListener('keydown', swallowKey);
-    const fields = itemFields(item);
-    fields.forEach((node) => {
-      node.contentEditable = 'plaintext-only';
-      if (node.contentEditable !== 'plaintext-only') node.contentEditable = 'true';
-      if (node.dataset.admBound) return;
-      node.dataset.admBound = '1';
-      node.addEventListener('paste', pastePlainText);
-      node.addEventListener('input', onInlineInput);
-      node.addEventListener('keydown', onInlineKey);
-    });
-    const part = item.dataset.part;
-    const entry = /^(work|experience|toolkit)\.(\d+)$/.exec(item.dataset.editItem || '');
-    item.appendChild(h('div', { class: 'adm-inline-bar' },
-      h('button', { class: 'adm-btn adm-btn-primary', type: 'button', text: 'Done', onclick: stopInline }),
-      h('button', {
-        class: 'adm-btn',
+  // The section open in the panel is outlined on the page
+  function markSelected() {
+    document.querySelectorAll('[data-adm-row]').forEach((node) => node.classList.toggle('adm-selected', node.dataset.admRow === state.openRow));
+    decorateBlocks();
+  }
+
+  // ---------- Layouts and parts of a section ----------
+  // A layout is a ready-made arrangement of a section (content.sections.<id>.layout, or a Text section's
+  // imagePlace); the parts (blocks) are its title, intro, text, video… which can be put in another order
+  // and adjusted one by one (blockOrder / blockLook, see applyBlocks in js/main.js).
+  const T = 't';
+  const P = 'p';
+  const B = 'b';
+  // Little drawings of the layouts: [x, y, width, height, text line / picture / box] on a 48×32 card
+  const DRAWINGS = {
+    'photo-right': [[4, 7, 20, 3, T], [4, 13, 22, 2, T], [4, 17, 18, 2, T], [30, 3, 16, 26, P]],
+    'photo-left': [[2, 3, 16, 26, P], [24, 7, 20, 3, T], [24, 13, 22, 2, T], [24, 17, 18, 2, T]],
+    'photo-above': [[4, 2, 40, 15, P], [4, 20, 20, 3, T], [4, 26, 32, 2, T]],
+    'video:stacked': [[4, 3, 20, 3, T], [4, 9, 40, 20, P]],
+    'video:side': [[4, 7, 14, 3, T], [4, 13, 12, 2, T], [21, 5, 24, 18, P]],
+    'contact:stacked': [[4, 3, 20, 3, T], [4, 9, 40, 4, B], [4, 15, 40, 4, B], [4, 21, 40, 8, B]],
+    'contact:side': [[4, 5, 14, 3, T], [4, 11, 12, 2, T], [22, 3, 22, 4, B], [22, 9, 22, 4, B], [22, 15, 22, 12, B]],
+    cards: [[3, 6, 20, 20, B], [25, 6, 20, 20, B]],
+    large: [[6, 5, 36, 22, B]],
+    'text:below': [[4, 3, 20, 3, T], [4, 9, 30, 2, T], [4, 14, 40, 15, P]],
+    'text:above': [[4, 2, 40, 15, P], [4, 20, 20, 3, T], [4, 26, 30, 2, T]],
+  };
+  DRAWINGS['text:side'] = DRAWINGS['photo-right'];
+  DRAWINGS['text:side-left'] = DRAWINGS['photo-left'];
+
+  function drawing(kind, value) {
+    let parts;
+    if (kind === 'work' || kind === 'grid') {
+      const n = value === 'auto' ? 3 : Number(value.slice(-1));
+      const w = (40 - (n - 1) * 3) / n;
+      parts = [0, 1].flatMap((row) => Array.from({ length: n }, (_, i) => [4 + i * (w + 3), 4 + row * 13, w, 11, B]));
+    } else {
+      const group = { reel: 'video', video: 'video', contact: 'contact', text: 'text' }[kind];
+      parts = DRAWINGS[group ? `${group}:${value}` : value] || [];
+    }
+    return `<svg viewBox="0 0 48 32" aria-hidden="true">${parts.map(([x, y, w, hgt, k]) => `<rect class="is-${k}" x="${x}" y="${y}" width="${w}" height="${hgt}" rx="1"/>`).join('')}</svg>`;
+  }
+
+  function layoutLabel(kind, value) {
+    if (kind === 'text') return { below: 'Picture below', above: 'Picture above', side: 'Picture right', 'side-left': 'Picture left' }[value];
+    if (kind === 'contact') return { stacked: 'Form below', side: 'Form beside' }[value];
+    if (kind === 'reel' || kind === 'video') return { stacked: 'Video below', side: 'Video beside' }[value];
+    return { 'photo-right': 'Photo right', 'photo-left': 'Photo left', 'photo-above': 'Photo above', auto: 'Fit the screen', 'cols-2': '2 per row',
+      'cols-3': '3 per row', 'cols-4': '4 per row', cards: 'Side by side', large: 'One per row, big' }[value] || value;
+  }
+
+  // The layouts a section can have: { kind, values, current, pick(value) }, or null
+  function layoutOptions(id) {
+    const kind = kindOf(id);
+    if (kind === 'text') {
+      const sec = state.draft.customSections.find((s) => s.id === id);
+      if (!sec || !sec.image) return null;
+      const values = ['below', 'above', 'side', 'side-left'];
+      return { kind, values, current: values.includes(sec.imagePlace) ? sec.imagePlace : 'below', pick: (v) => { sec.imagePlace = v; } };
+    }
+    const values = (window.SECTION_LAYOUTS || {})[kind];
+    if (!values) return null;
+    const set = state.draft.sections[id];
+    return { kind, values, current: values.includes(set.layout) ? set.layout : values[0], pick: (v) => { set.layout = v; } };
+  }
+
+  function layoutPicker(id, options, after) {
+    return h('div', { class: 'adm-layouts' }, options.values.map((value) => {
+      const btn = h('button', {
+        class: `adm-layout${value === options.current ? ' is-active' : ''}`,
         type: 'button',
-        text: 'More…',
-        title: 'All options for this item in the admin panel',
-        onclick: () => {
-          const path = item.dataset.editItem;
-          stopInline();
-          editFromPage(path);
+        'aria-pressed': String(value === options.current),
+        onclick: (e) => {
+          e.stopPropagation();
+          keepInPlace(() => document.getElementById(id), () => {
+            options.pick(value);
+            if (after) after();
+            rerenderTab();
+          });
+        },
+      }, h('span', { text: layoutLabel(options.kind, value) }));
+      btn.insertAdjacentHTML('afterbegin', drawing(options.kind, value));
+      return btn;
+    }));
+  }
+
+  const BLOCK_LABELS = {
+    title: 'Title', intro: 'Intro line', bio: 'Bio', skills: 'Skills', video: 'Video', highlights: 'Highlights slider', filters: 'Filter buttons',
+    grid: 'Project cards', list: 'List', formtitle: 'Form title', form: 'Message form', alt: 'Email address', heading: 'Title and intro', text: 'Text',
+    buttons: 'Buttons', gallery: 'Pictures', caption: 'Caption', quotes: 'Quotes', logos: 'Logos', numbers: 'Numbers', faq: 'Questions', line: 'Big line', sub: 'Line under it',
+  };
+
+  // The section's parts as the page has them (in their own order), and in the order they show
+  function naturalBlocks(id) {
+    const section = document.getElementById(id);
+    return section ? [...new Set([...section.querySelectorAll('[data-blocks] > [data-block]')].map((b) => b.dataset.block))] : [];
+  }
+
+  function shownBlocks(id) {
+    const names = naturalBlocks(id);
+    const order = state.draft.sections[id].blockOrder || [];
+    const rank = (n) => (order.includes(n) ? order.indexOf(n) : order.length + names.indexOf(n));
+    return [...names].sort((a, b) => rank(a) - rank(b));
+  }
+
+  function setBlockOrder(id, names) {
+    const set = state.draft.sections[id];
+    if (names.join() === naturalBlocks(id).join()) delete set.blockOrder;
+    else set.blockOrder = names;
+  }
+
+  const blockLookOf = (id, name) => ((state.draft.sections[id].blockLook || {})[name]) || {};
+
+  // Settings left at "as is" are dropped, so an untouched section stores nothing
+  function setBlockLook(id, name, key, value) {
+    const set = state.draft.sections[id];
+    const looks = { ...(set.blockLook || {}) };
+    const look = { ...(looks[name] || {}), [key]: value };
+    Object.keys(look).forEach((k) => { if (!look[k]) delete look[k]; });
+    if (Object.keys(look).length) looks[name] = look;
+    else delete looks[name];
+    if (Object.keys(looks).length) set.blockLook = looks;
+    else delete set.blockLook;
+  }
+
+  // A change to a part; the part stays where it is on screen
+  function blockChange(id, name, change) {
+    keepInPlace(() => document.querySelector(`#${id} [data-blocks] > [data-block="${name}"]`), () => {
+      change();
+      rerenderTab();
+    });
+  }
+
+  function moveBlockBy(id, name, dir) {
+    blockChange(id, name, () => {
+      const names = shownBlocks(id);
+      const i = names.indexOf(name);
+      const j = i + dir;
+      if (j < 0 || j >= names.length) return;
+      [names[i], names[j]] = [names[j], names[i]];
+      setBlockOrder(id, names);
+    });
+  }
+
+  function resetBlocks(id) {
+    const set = state.draft.sections[id];
+    keepInPlace(() => document.getElementById(id), () => {
+      delete set.blockOrder;
+      delete set.blockLook;
+      rerenderTab();
+    });
+  }
+
+  const ALIGNS = ['', 'left', 'center', 'right'];
+  const WIDTHS = ['', 'medium', 'narrow'];
+  const SPACES = [[-2, 'Less space above'], [-1, 'A bit less'], [0, 'Space above: as is'], [1, 'A bit more'], [2, 'More'], [3, 'Much more'], [4, 'Most']];
+
+  // Panel (Look and layout): every part with its order, alignment, space above and width
+  function partsBox(id) {
+    const names = shownBlocks(id);
+    if (names.length < 2) return null;
+    const set = state.draft.sections[id];
+    const select = (name, key, options) => {
+      const look = blockLookOf(id, name);
+      const current = String(look[key] || (key === 'space' ? 0 : ''));
+      return h('select', {
+        'aria-label': `${BLOCK_LABELS[name] || name}: ${key}`,
+        onchange: (e) => blockChange(id, name, () => setBlockLook(id, name, key, key === 'space' ? Number(e.target.value) : e.target.value)),
+      }, options.map(([value, label]) => h('option', { value, text: label, selected: String(value) === current })));
+    };
+    return h('div', { class: 'adm-field' },
+      h('div', { class: 'adm-section-head' },
+        h('span', { class: 'adm-label', text: 'Parts' }),
+        set.blockOrder || set.blockLook ? h('button', { class: 'adm-link', type: 'button', text: 'Reset parts', onclick: () => resetBlocks(id) }) : null),
+      h('p', { class: 'adm-hint', text: 'Their order, alignment, space above and width. On the page, open this section and hover a part for the same controls on its left.' }),
+      names.map((name, i) => h('div', { class: 'adm-part-row' },
+        h('span', { class: 'adm-part-name', text: BLOCK_LABELS[name] || name }),
+        h('div', { class: 'adm-row-controls' },
+          iconBtn('↑', 'Move up', () => moveBlockBy(id, name, -1), i === 0),
+          iconBtn('↓', 'Move down', () => moveBlockBy(id, name, 1), i === names.length - 1)),
+        select(name, 'align', [['', 'Align: as is'], ['left', 'Left'], ['center', 'Centre'], ['right', 'Right']]),
+        select(name, 'space', SPACES),
+        select(name, 'width', [['', 'Width: as is'], ['medium', 'Medium'], ['narrow', 'Narrow']]))));
+  }
+
+  // ---------- Parts on the page ----------
+  // The section open in the panel: hovering one of its parts shows a small column of controls on its left
+  const ALIGN_ICON = (a) => {
+    const x = { left: [4, 4, 4], center: [6, 4, 8], right: [8, 4, 12] }[a] || [4, 4, 4];
+    const w = a ? [12, 16, 8] : [16, 16, 16];
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">${[7, 12, 17].map((y, i) => `<path d="M${x[i]} ${y}h${w[i]}"/>`).join('')}</svg>`;
+  };
+  const WIDTH_ICON = (wd) => {
+    const half = { '': 9, medium: 6, narrow: 3 }[wd || ''];
+    return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5v14M21 5v14"/><path d="M${12 - half} 12h${half * 2}"/></svg>`;
+  };
+
+  function decorateBlocks() {
+    document.querySelectorAll('.adm-block-bar').forEach((bar) => bar.remove());
+    const id = state.openRow;
+    const section = id && state.draft.sections[id] && document.querySelector(`[data-adm-row="${id}"]`);
+    if (!section) return;
+    const names = shownBlocks(id);
+    if (names.length < 2) return;
+    section.querySelectorAll('[data-blocks] > [data-block]').forEach((node) => {
+      if (editing && editing.node === node) return; // not inside the text being typed
+      const name = node.dataset.block;
+      const label = BLOCK_LABELS[name] || name;
+      const i = names.indexOf(name);
+      const look = blockLookOf(id, name);
+      const next = (list, value) => list[(list.indexOf(value || '') + 1) % list.length];
+      const space = Number(look.space) || 0;
+      const handle = h('span', { class: 'adm-bar-btn adm-block-handle', title: `${label}: drag to move it`, text: '⠿' });
+      handle.addEventListener('pointerdown', (e) => dragBlock(e, id, name, node));
+      node.appendChild(h('div', { class: 'adm-block-bar' },
+        handle,
+        barBtn('↑', `Move ${label} up`, () => moveBlockBy(id, name, -1), { disabled: i === 0 }),
+        barBtn('↓', `Move ${label} down`, () => moveBlockBy(id, name, 1), { disabled: i === names.length - 1 }),
+        barBtn(ALIGN_ICON(look.align), `Alignment: ${look.align || 'as is'} (click for the next)`, () => blockChange(id, name, () => setBlockLook(id, name, 'align', next(ALIGNS, look.align))), { html: true, pressed: Boolean(look.align) }),
+        barBtn('−', 'Less space above', () => blockChange(id, name, () => setBlockLook(id, name, 'space', Math.max(space - 1, -2))), { disabled: space <= -2 }),
+        barBtn('+', 'More space above', () => blockChange(id, name, () => setBlockLook(id, name, 'space', Math.min(space + 1, 4))), { disabled: space >= 4 }),
+        barBtn(WIDTH_ICON(look.width), `Width: ${look.width || 'as is'} (click for the next)`, () => blockChange(id, name, () => setBlockLook(id, name, 'width', next(WIDTHS, look.width))), { html: true, pressed: Boolean(look.width) }),
+        look.align || look.width || space ? barBtn('↺', `Put ${label} back as it was`, () => blockChange(id, name, () => {
+          ['align', 'space', 'width'].forEach((key) => setBlockLook(id, name, key, ''));
+        })) : null));
+    });
+  }
+
+  // Dragging a part by its ⠿: the line shows where it goes
+  function dragBlock(e, id, name, node) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const others = [...node.parentElement.children].filter((c) => c.dataset.block && c !== node);
+    let target = null;
+    let before = false;
+    node.classList.add('is-dragging');
+    const clear = () => others.forEach((o) => o.classList.remove('drop-before', 'drop-after'));
+    const move = (ev) => {
+      const over = others.find((o) => {
+        const box = o.getBoundingClientRect();
+        return ev.clientY >= box.top && ev.clientY <= box.bottom;
+      });
+      if (!over) return;
+      clear();
+      target = over;
+      const box = over.getBoundingClientRect();
+      before = ev.clientY < box.top + box.height / 2;
+      over.classList.add(before ? 'drop-before' : 'drop-after');
+    };
+    const end = (ev) => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+      node.classList.remove('is-dragging');
+      clear();
+      if (!target || ev.type === 'pointercancel') return;
+      const to = target.dataset.block;
+      blockChange(id, name, () => {
+        const names = shownBlocks(id);
+        moveTo(names, names.indexOf(name), names.indexOf(to), before);
+        setBlockOrder(id, names);
+      });
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+  }
+
+  // Layouts from the section bar: ▦ opens the same little drawings as in the panel
+  function layoutButton(id) {
+    const options = layoutOptions(id);
+    if (!options) return null;
+    const menu = h('div', { class: 'adm-insert-menu adm-layout-menu', hidden: true }, layoutPicker(id, options, () => { menu.hidden = true; }));
+    return h('div', { class: 'adm-bar-pop' },
+      barBtn('▦', `Layout: ${layoutLabel(options.kind, options.current)}`, () => {
+        const open = menu.hidden;
+        document.querySelectorAll('.adm-insert-menu').forEach((m) => { m.hidden = true; });
+        menu.hidden = !open;
+      }),
+      menu);
+  }
+
+  // ---------- Section bars ----------
+  function sectionBar(id) {
+    const c = state.draft;
+    const order = c.sections.order;
+    const at = order.indexOf(id);
+    const fixed = at < 0; // the top section and the footer stay where they are
+    const builtin = window.SiteSections.builtin.includes(id);
+    const hidden = Boolean(c.hidden[id]);
+    const kind = fixed ? id : kindOf(id);
+    const label = id === 'hero' ? 'Top section' : id === 'footer' ? 'Footer' : sectionLabel(id);
+    const change = (fn) => {
+      fn();
+      rerenderTab();
+      renderNow();
+    };
+    return h('div', { class: 'adm-section-bar' },
+      h('button', {
+        class: 'adm-bar-name',
+        type: 'button',
+        title: 'Open it in the panel',
+        onclick: (e) => { e.stopPropagation(); selectSection(id, { reveal: true }); },
+      }, h('span', { class: 'adm-badge', text: KIND_LABELS[kind] }), h('span', { text: hidden ? `${label} (hidden)` : label })),
+      fixed ? null : barBtn('↑', 'Move up', () => keepInPlace(() => document.getElementById(id), () => change(() => moveTo(order, at, at - 1, true))), { disabled: at === 0 }),
+      fixed ? null : barBtn('↓', 'Move down', () => keepInPlace(() => document.getElementById(id), () => change(() => moveTo(order, at, at + 1, false))), { disabled: at === order.length - 1 }),
+      id === 'hero' ? null : barBtn(hidden ? EYE_OFF : EYE, hidden ? 'Hidden: click to show it' : 'Hide it (stays here, faded, while you edit)', () => change(() => {
+        if (hidden) delete c.hidden[id];
+        else c.hidden[id] = true;
+      }), { html: true, pressed: !hidden }),
+      fixed ? null : layoutButton(id),
+      fixed || builtin ? null : barBtn('⧉', 'Duplicate section', () => duplicateSection(id)),
+      fixed ? null : barBtn('✕', builtin ? 'Remove from the page' : 'Delete section', () => removeSection(id), { danger: true }),
+      barBtn('⚙', 'Settings: open it in the panel', () => selectSection(id, { reveal: true })));
+  }
+
+  // "+ Add section" on a section's top edge (or the last one's bottom edge): new sections go in there
+  function insertLine(at, below) {
+    const menu = h('div', { class: 'adm-insert-menu', hidden: true }, NEW_SECTIONS.map(([kind, name, desc]) => h('button', {
+      class: 'adm-bar-btn',
+      type: 'button',
+      title: desc,
+      text: name,
+      onclick: (e) => {
+        e.stopPropagation();
+        addSection(kind, at);
+        renderNow();
+      },
+    })));
+    return h('div', { class: `adm-insert${below ? ' is-below' : ''}` },
+      h('button', {
+        class: 'adm-insert-btn',
+        type: 'button',
+        text: '+ Add section',
+        onclick: (e) => {
+          e.stopPropagation();
+          const open = menu.hidden;
+          document.querySelectorAll('.adm-insert-menu').forEach((m) => { m.hidden = true; });
+          menu.hidden = !open;
         },
       }),
-      part ? h('button', {
-        class: 'adm-btn',
+      menu);
+  }
+
+  // ---------- Lists on the page ----------
+  // What one entry of a list is called
+  function entryKind(path) {
+    const fixed = { work: 'project', experience: 'entry', toolkit: 'row', 'about.skills': 'skill', 'about.paragraphs': 'paragraph' };
+    if (fixed[path]) return fixed[path];
+    if (/\.images$/.test(path)) return 'picture';
+    const sec = getPath(path.replace(/\.items$/, ''));
+    return { quotes: 'quote', logos: 'logo', numbers: 'number', faq: 'question' }[sec && sec.type] || 'item';
+  }
+
+  // What a new one starts as (projects, pictures and logos are made in addEntry)
+  const NEW_ENTRIES = {
+    entry: () => ({ date: '', role: 'New role', org: '', text: '' }),
+    row: () => ({ label: 'New', tools: ['A tool'] }),
+    skill: () => 'New skill',
+    paragraph: () => 'A new paragraph.',
+    quote: () => ({ ...ITEM_FIELDS.quotes, quote: 'A new quote.', name: 'Their name' }),
+    number: () => ({ value: '10', label: 'something counted' }),
+    question: () => ({ q: 'A new question?', a: 'The answer.' }),
+  };
+
+  const entryIndex = (node) => Number(node.dataset.entry.split('.').pop());
+
+  function decorateList(list) {
+    const path = list.dataset.entries;
+    const arr = getPath(path);
+    if (!Array.isArray(arr)) return;
+    const what = entryKind(path);
+    const vertical = list.dataset.axis === 'y';
+    const nodes = [...list.querySelectorAll(':scope > [data-entry]')];
+    nodes.forEach((node, n) => node.appendChild(itemBar(path, arr, what, nodes, n, vertical)));
+    list.appendChild(h(/^(OL|UL)$/.test(list.tagName) ? 'li' : 'div', { class: 'adm-add-tile' },
+      h('button', {
         type: 'button',
-        text: 'Hide',
-        title: 'Take this off the page (bring it back with the eye or its tick in the Page tab)',
-        onclick: () => {
-          stopInline();
-          state.draft.hidden[part] = true;
-          rerenderTab();
+        text: `+ Add ${what}`,
+        onclick: (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          addEntry(path, what, list);
         },
-      }) : null,
-      entry ? h('button', {
-        class: 'adm-btn adm-btn-danger',
-        type: 'button',
-        text: 'Delete',
-        title: 'Delete this entry',
-        onclick: () => {
-          if (!confirm('Delete this entry? This can\u2019t be undone after saving.')) return;
-          stopInline();
-          state.draft[entry[1]].splice(Number(entry[2]), 1);
-          if (entry[1] === 'work') state.openItem = null;
-          rerenderTab();
-        },
-      }) : null));
-    placeCaretAtEnd(fields[0]);
+      })));
   }
 
-  function stopInline() {
-    if (!activeItem) return;
-    const item = activeItem;
-    activeItem = null;
-    item.classList.remove('adm-active');
-    item.removeEventListener('click', swallow);
-    item.removeEventListener('keydown', swallowKey);
-    itemFields(item).forEach((node) => node.removeAttribute('contenteditable'));
-    const bar = item.querySelector(':scope > .adm-inline-bar');
-    if (bar) bar.remove();
-    if (document.activeElement && item.contains(document.activeElement)) document.activeElement.blur();
-    changed();
+  // Move, duplicate and delete; the arrows swap with the neighbour shown (a Work grid can skip projects)
+  function itemBar(path, arr, what, nodes, n, vertical) {
+    const index = entryIndex(nodes[n]);
+    const item = arr[index];
+    const swapWith = (other) => {
+      const j = entryIndex(other);
+      keepInPlace(() => document.querySelector(`[data-entry="${path}.${keepAt}"]`), () => {
+        keepAt = j;
+        changeList(path, (a) => { [a[index], a[j]] = [a[j], a[index]]; });
+      });
+    };
+    let keepAt = index; // where the moved entry is: before the move, then after it
+    return h('div', { class: 'adm-item-bar' },
+      barBtn(vertical ? '↑' : '←', `Move this ${what} ${vertical ? 'up' : 'left'}`, () => swapWith(nodes[n - 1]), { disabled: n === 0 }),
+      barBtn(vertical ? '↓' : '→', `Move this ${what} ${vertical ? 'down' : 'right'}`, () => swapWith(nodes[n + 1]), { disabled: n === nodes.length - 1 }),
+      what === 'project' ? barBtn('Draft', item.draft ? 'Draft: only you see it. Click to put it on the live site' : 'Make it a draft (off the live site)', () => changeList(path, () => { item.draft = !item.draft; }), { pressed: Boolean(item.draft) }) : null,
+      barBtn('⧉', `Duplicate this ${what}`, () => changeList(path, (a, main) => {
+        const copy = clone(a[index] === undefined ? '' : a[index]);
+        if (main && what === 'project' && copy.title) copy.title = `${copy.title} (copy)`;
+        a.splice(index + 1, 0, copy);
+      })),
+      barBtn('✕', `Delete this ${what}`, () => {
+        if (confirm(`Delete this ${what}?`)) changeList(path, (a) => { a.splice(index, 1); });
+      }, { danger: true }));
   }
 
-  const swallow = (e) => e.stopPropagation();
-  const swallowKey = (e) => { if (!(e.ctrlKey && e.altKey)) e.stopPropagation(); }; // let the admin shortcut through
-
-  function placeCaretAtEnd(node) {
-    node.focus();
-    const range = document.createRange();
-    range.selectNodeContents(node);
-    range.collapse(false);
-    const selection = window.getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
+  // Changes a list from the page. Lists of plain text (skills, bio paragraphs) are translated item by item,
+  // so their translations get the same change. The project open in the panel stays open.
+  function changeList(path, change) {
+    const arr = getPath(path);
+    const work = state.draft.work;
+    const open = work[state.openItem];
+    const keys = path.split('.');
+    const key = keys.pop();
+    const owner = keys.length ? getPath(keys.join('.')) : null;
+    const translations = arr.some((v) => typeof v === 'string') && owner && owner.i18n
+      ? Object.values(owner.i18n).map((tr) => tr[key]).filter(Array.isArray) : [];
+    translations.forEach((tr) => { while (tr.length < arr.length) tr.push(''); });
+    change(arr, true);
+    translations.forEach((tr) => change(tr, false));
+    if (open) state.openItem = work.includes(open) ? work.indexOf(open) : null;
+    rerenderTab();
+    renderNow();
   }
 
-  // Clicking elsewhere on the page finishes editing (clicks in the panel don't, so you can check the form)
-  document.addEventListener('pointerdown', (e) => {
-    if (activeItem && !activeItem.contains(e.target) && !e.target.closest('.adm-root, .adm-edge')) stopInline();
-  }, true);
+  function addEntry(path, what, list) {
+    const arr = getPath(path);
+    // Pictures and logos start from a file
+    if (what === 'picture' || what === 'logo') {
+      const sec = getPath(path.replace(/\.(images|items)$/, ''));
+      const input = h('input', { type: 'file', accept: 'image/*', multiple: what === 'picture' });
+      input.addEventListener('change', () => {
+        [...input.files].forEach((file, n) => {
+          const src = stageFile(file, `assets/sections/${slug(sectionLabel(sec.id))}-${what}-${Date.now().toString(36)}${n}${extension(file)}`);
+          if (src) arr.push(what === 'picture' ? { src, alt: '', caption: '' } : { ...ITEM_FIELDS.logos, src });
+        });
+        rerenderTab();
+        renderNow();
+      });
+      input.click();
+      return;
+    }
+    let entry;
+    if (what === 'project') {
+      const sectionId = sectionOf(list);
+      const allowed = ((state.draft.sections[sectionId] || {}).categories || [])[0];
+      entry = normalizeWork({ type: allowed || (state.draft.categories[0] || {}).id, title: 'New project', teaser: 'One line about it.' });
+    } else {
+      entry = NEW_ENTRIES[what] ? NEW_ENTRIES[what]() : {};
+    }
+    arr.push(entry);
+    if (what === 'project') state.openItem = arr.length - 1;
+    rerenderTab();
+    renderNow();
+    // Straight into typing its first text, all of it selected
+    const node = document.querySelector(`[data-entry="${path}.${arr.length - 1}"]`);
+    const first = node && (node.matches('[data-field]') ? node : node.querySelector('[data-field]'));
+    if (first) startEditing(first, { selectAll: true });
+  }
 
-  function setPath(obj, path, value) {
+  // ---------- Typing on the page ----------
+  // Where a field's text is kept: in the content, or (while another language is shown) in the translation
+  // on the nearest object it belongs to, e.g. "work.2.title" → work[2].i18n.nl.title
+  function slotIn(obj, path) {
     const keys = path.split('.');
     const last = keys.pop();
     const parent = keys.reduce((node, key, i) => {
       if (node[key] == null) node[key] = /^\d+$/.test(keys[i + 1] || last) ? [] : {};
       return node[key];
     }, obj);
-    parent[last] = value;
+    return { obj: parent, key: last };
   }
 
-  // "work.2.title" in English, or work[2].i18n.nl.title while editing Dutch:
-  // the translation sits on the nearest object the field belongs to
-  function setField(path, value) {
+  function fieldSlot(path) {
     const keys = path.split('.');
-    if (!translating(keys.filter((k) => !/^\d+$/.test(k)).pop())) {
-      setPath(state.draft, path, value);
-      return;
-    }
+    if (!translating(keys.filter((k) => !/^\d+$/.test(k)).pop())) return slotIn(state.draft, path);
     let owner = state.draft;
     let rest = keys;
     keys.reduce((node, key, i) => {
@@ -590,30 +1235,204 @@
       }
       return next;
     }, state.draft);
-    setPath(translationOf(owner), rest.join('.'), value);
+    return slotIn(translationOf(owner), rest.join('.'));
   }
 
-  function onInlineInput(e) {
-    const value = e.currentTarget.textContent.replace(/ /g, ' ').replace(/\n/g, ' ');
-    setField(e.currentTarget.dataset.field, value);
+  function startEditing(node, { event, selectAll, atStart } = {}) {
+    if (editing && editing.node === node) return;
+    stopEditing();
+    const path = node.dataset.field;
+    const rich = node.hasAttribute('data-rich');
+    const slot = fieldSlot(path);
+    editing = { node, path, rich, slot, stored: slot.obj[slot.key] };
+    node.querySelectorAll(CHROME).forEach((n) => n.remove());
+    // Text with formatting shows as it's typed (**bold**…), and a title as plain text instead of letter by letter
+    if (rich) node.textContent = editing.stored || getPath(path) || '';
+    else if (node.classList.contains('reveal')) node.textContent = node.getAttribute('aria-label') || node.textContent;
+    node.classList.add('adm-typing');
+    node.contentEditable = 'plaintext-only';
+    if (node.contentEditable !== 'plaintext-only') node.contentEditable = 'true';
+    editing.handlers = { input: onEditInput, keydown: onEditKey, paste: pastePlainText };
+    Object.entries(editing.handlers).forEach(([type, fn]) => node.addEventListener(type, fn));
+    node.focus({ preventScroll: true });
+    placeCaret(node, event, selectAll, atStart);
+    showTypingHint();
+    // The panel opens this text's section (and project)
+    const project = node.closest('[data-edit-item^="work."]');
+    selectSection(sectionOf(node), { item: project ? Number(project.dataset.editItem.split('.')[1]) : undefined });
+  }
+
+  function placeCaret(node, event, selectAll, atStart) {
+    let range = event && document.caretRangeFromPoint ? document.caretRangeFromPoint(event.clientX, event.clientY) : null;
+    if (!range || !node.contains(range.startContainer)) {
+      range = document.createRange();
+      range.selectNodeContents(node);
+      if (!selectAll) range.collapse(Boolean(atStart));
+    }
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  function onEditInput() {
+    const { node, rich, slot } = editing;
+    const typed = rich ? node.innerText.replace(/\n+$/, '') : node.textContent.replace(/\n/g, ' ');
+    slot.obj[slot.key] = typed.replace(/ /g, ' ');
+    node.classList.remove('is-empty');
     syncPanel();
     updateStatus();
+    scheduleHistory();
+    syncPhoneSoon();
+    showTypingHint();
   }
 
-  function onInlineKey(e) {
-    // Stop here rather than at the item: Enter ends editing (removing the item's guard) and must not reach the card
-    swallowKey(e);
-    // Every field is a single line or paragraph, so Enter (and Esc) finish editing
-    if (e.key === 'Enter' || e.key === 'Escape') {
+  function onEditKey(e) {
+    // Keys stay in the text (a work card would open its pop-up on Enter or Space); the admin shortcut gets through
+    if (!(e.ctrlKey && e.altKey)) e.stopPropagation();
+    if (e.key === 'Escape') {
       e.preventDefault();
-      stopInline();
+      editing.slot.obj[editing.slot.key] = editing.stored;
+      syncPanel();
+      stopEditing();
+      return;
     }
+    if (e.key !== 'Enter') return;
+    if (editing.rich && !(e.ctrlKey || e.metaKey)) return; // a new line; an empty line starts a new paragraph
+    e.preventDefault();
+    if (/^about\.paragraphs\.\d+$/.test(editing.path) && !e.ctrlKey && !e.metaKey && !translating('paragraphs')) splitParagraph();
+    else stopEditing();
+  }
+
+  // Enter in a bio paragraph: the text after the cursor becomes the next paragraph
+  function splitParagraph() {
+    const { node, path } = editing;
+    const i = Number(path.split('.').pop());
+    const text = node.textContent.replace(/ /g, ' ');
+    let at = text.length;
+    const selection = window.getSelection();
+    if (selection.rangeCount && node.contains(selection.anchorNode)) {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      range.setEnd(selection.anchorNode, selection.anchorOffset);
+      at = range.toString().length;
+    }
+    editing.slot.obj[editing.slot.key] = text.slice(0, at).trimEnd();
+    stopEditing();
+    changeList('about.paragraphs', (a, main) => a.splice(i + 1, 0, main ? text.slice(at).trimStart() : ''));
+    const next = document.querySelector(`[data-field="about.paragraphs.${i + 1}"]`);
+    if (next) startEditing(next, { atStart: true });
+  }
+
+  function stopEditing() {
+    if (!editing) return;
+    const { node, handlers } = editing;
+    editing = null;
+    Object.entries(handlers || {}).forEach(([type, fn]) => node.removeEventListener(type, fn));
+    node.removeAttribute('contenteditable');
+    node.classList.remove('adm-typing');
+    hideTypingHint();
+    if (node.contains(document.activeElement)) document.activeElement.blur();
+    changed(); // redraws the page with the text as it shows (formatting, title letters) and records the step
   }
 
   function pastePlainText(e) {
     e.preventDefault();
     document.execCommand('insertText', false, e.clipboardData.getData('text/plain'));
   }
+
+  // A small line under the text being typed: which keys do what
+  let typingHint = null;
+
+  function showTypingHint() {
+    if (!editing) return;
+    const { node, rich, path } = editing;
+    if (!typingHint) {
+      typingHint = h('div', { class: 'adm-typing-hint', 'aria-hidden': 'true' });
+      document.body.appendChild(typingHint);
+    }
+    typingHint.textContent = rich ? 'Empty line: new paragraph · Ctrl+Enter: done · Esc: cancel'
+      : /^about\.paragraphs\./.test(path) && !translating('paragraphs') ? 'Enter: new paragraph · Click elsewhere: done · Esc: cancel'
+        : 'Enter: done · Esc: cancel';
+    const box = node.getBoundingClientRect();
+    typingHint.style.left = `${Math.max(box.left + window.scrollX, 8)}px`;
+    typingHint.style.top = `${box.bottom + window.scrollY + 10}px`;
+  }
+
+  function hideTypingHint() {
+    if (typingHint) typingHint.remove();
+    typingHint = null;
+  }
+
+  const editingPage = () => Boolean(state.draft && root && !root.hidden && !previewing && document.documentElement.classList.contains('adm-editing'));
+
+  // Clicking text starts typing in it; clicking elsewhere in a section opens that section in the panel
+  document.addEventListener('click', (e) => {
+    if (!editingPage() || !e.target.closest) return;
+    if (e.target.closest(`.adm-root, .adm-edge, .adm-phone, .modal-overlay, .adm-typing-hint, ${CHROME}`)) return;
+    const node = e.target.closest('[data-field]');
+    if (node) {
+      e.preventDefault();
+      e.stopPropagation(); // a project card would open its pop-up
+      if (!editing || editing.node !== node) startEditing(node, { event: e });
+      return;
+    }
+    selectSection(sectionOf(e.target));
+  }, true);
+
+  // Clicking outside the text being typed finishes it (clicks in the panel don't, so you can check the form)
+  document.addEventListener('pointerdown', (e) => {
+    if (!e.target.closest) return;
+    if (editing && !editing.node.contains(e.target) && !e.target.closest('.adm-root, .adm-edge')) stopEditing();
+    if (!e.target.closest('.adm-insert, .adm-bar-pop')) document.querySelectorAll('.adm-insert-menu').forEach((menu) => { menu.hidden = true; });
+  }, true);
+
+  // ---------- Page and panel follow each other ----------
+  // Opens a section's row in the panel (and a project's form), without taking focus from the page
+  function selectSection(id, { item, reveal } = {}) {
+    if (!id || !state.draft) return;
+    const panelChanges = state.tab !== 'page' || state.allProjects || state.openRow !== id || (item !== undefined && state.openItem !== item);
+    state.tab = 'page';
+    state.allProjects = false;
+    state.openRow = id;
+    if (item !== undefined) state.openItem = item;
+    markSelected();
+    if (!screen || !screen.querySelector('.adm-editor')) return;
+    if (reveal && isMinimised()) restore();
+    if (panelChanges) showEditor();
+    if (!panelChanges && !reveal) return;
+    const row = screen.querySelector(`.adm-outline-row[data-row="${id}"]`);
+    if (!row) return;
+    const target = (item !== undefined && row.querySelector('.adm-row-body .adm-entry-list > .adm-entry.is-open')) || row;
+    root.scrollTo({ top: target.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop - 80, behavior: 'smooth' });
+  }
+
+  // ---------- Preview ----------
+  // The page as visitors see it: no bars, outlines or drafts. The panel slides away; the pill at the
+  // bottom (or Esc, or the Admin tab) comes back.
+  function setPreviewing(on) {
+    if (previewing === on) return;
+    stopEditing();
+    // Noted before anything changes: hiding the editing extras already moves things
+    const anchor = pageAnchor();
+    previewing = on;
+    document.documentElement.classList.toggle('adm-previewing', on);
+    document.querySelectorAll('.adm-preview-pill').forEach((pill) => pill.remove());
+    if (on) {
+      document.body.appendChild(h('button', { class: 'adm-preview-pill', type: 'button', onclick: () => setPreviewing(false) },
+        h('span', { class: 'adm-preview-dot', 'aria-hidden': 'true' }),
+        h('span', { text: 'Preview: the page as visitors see it' }),
+        h('strong', { text: 'Back to editing' })));
+      minimise();
+    } else {
+      restore();
+    }
+    renderNow(); // draft projects go and come back
+    restorePageAnchor(anchor);
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (previewing && e.key === 'Escape') setPreviewing(false);
+  });
 
   // Copy what's typed on the page into the open panel form, without rebuilding it (which would steal focus)
   function syncPanel() {
@@ -638,6 +1457,7 @@
     const [section, index] = path.split('.');
     let row = null;
     state.tab = 'page';
+    state.allProjects = false;
     if (section === 'links') state.tab = 'site';
     else if (section === 'intros') row = index;
     else if (section === 'work') { row = gridForProject(Number(index)); state.openItem = Number(index); }
@@ -699,6 +1519,7 @@
     root.appendChild(screen);
     ['keydown', 'pointerdown', 'input'].forEach((type) => root.addEventListener(type, resetIdle));
     root.addEventListener('pointerdown', startDrag);
+    ['pointerdown', 'focusin'].forEach((type) => root.addEventListener(type, (e) => { panelTarget = e.target; }));
     // Shown on the right edge while the panel is minimised; the dot means unsaved changes
     edgeTab = h('button', { class: 'adm-edge', type: 'button', hidden: true, 'aria-label': 'Show admin panel', onclick: restore },
       h('span', { text: 'Admin' }),
@@ -780,6 +1601,12 @@
     });
   }
 
+  function previewButton() {
+    const btn = h('button', { class: 'adm-close adm-win-preview', type: 'button', title: 'Preview: the page as visitors see it, without editing controls or drafts', 'aria-label': 'Preview', onclick: () => setPreviewing(true) });
+    btn.innerHTML = EYE;
+    return btn;
+  }
+
   function windowButtons() {
     return [
       h('button', { class: 'adm-close adm-win-phone', type: 'button', onclick: togglePhone }),
@@ -824,6 +1651,7 @@
   }
 
   function restore() {
+    if (previewing) { setPreviewing(false); return; }
     root.classList.remove('is-min');
     setTimeout(placePhone);
     root.inert = false;
@@ -872,9 +1700,12 @@
       if (!confirm('Discard your unsaved changes?')) return;
       clearPending();
     }
-    if (state.draft && window.renderSite) window.renderSite(window.SITE_CONTENT || {});
     closePhone();
+    // Noted before the editing extras go: that already moves things
+    const anchor = pageAnchor();
     undecoratePage();
+    if (state.draft && window.renderSite) window.renderSite(window.SITE_CONTENT || {});
+    restorePageAnchor(anchor);
     state.draft = null;
     state.token = null;
     clearTimeout(idleTimer);
@@ -1256,6 +2087,7 @@
     // Content that doesn't say which repository it belongs to yet: this one
     if (!state.draft.site.repo.owner || !state.draft.site.repo.repo) claimRepo();
     state.savedJson = snapshot();
+    resetHistory();
     renderPage(state.draft);
   }
 
@@ -1285,6 +2117,7 @@
     // After the first save, offer to delete the previous owner's files that nothing uses any more
     state.offerCleanup = true;
     try { sessionStorage.removeItem(WIZARD_SKIP_KEY); } catch { /* storage blocked */ }
+    resetHistory();
     renderPage(state.draft);
   }
 
@@ -1479,7 +2312,7 @@
       if (result.status !== 'available') return;
       state.updateInfo = result;
       const editor = screen && screen.querySelector('.adm-editor');
-      if (editor && !editor.querySelector('.adm-update-banner')) editor.querySelector('.adm-top').after(updateBanner());
+      if (editor && !editor.querySelector('.adm-update-banner')) editor.appendChild(updateBanner());
     } catch { /* offline or not readable: no notice, nothing else changes */ }
   }
 
@@ -1592,28 +2425,35 @@
       h('div', { class: 'adm-top' },
         h('h2', { text: 'Admin' }),
         h('div', { class: 'adm-top-actions' },
+          h('button', { class: 'adm-close adm-undo', type: 'button', text: '↶', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo', onclick: undo }),
+          h('button', { class: 'adm-close adm-redo', type: 'button', text: '↷', title: 'Redo (Ctrl+Shift+Z)', 'aria-label': 'Redo', onclick: redo }),
           saveBtn,
           h('button', { class: 'adm-btn', type: 'button', text: 'Lock', onclick: () => { state.token = null; showUnlock('Locked. Unsaved changes are kept.'); } }),
+          previewButton(),
           windowButtons(),
           h('button', { class: 'adm-close', type: 'button', 'aria-label': 'Minimise admin', title: 'Minimise', text: '–', onclick: minimise }),
           closeButton())),
-      updateBanner(),
       statusEl,
       languagePicker(),
       tabs,
-      body);
+      body,
+      updateBanner());
     panel.saveBtn = saveBtn;
     screen.innerHTML = '';
     screen.appendChild(panel);
     labelWindowButtons();
     renderTab(body);
     updateStatus();
+    updateHistoryButtons();
   }
 
   function rerenderTab() {
     const body = screen.querySelector('.adm-body');
+    const anchor = panelAnchor();
     if (body) renderTab(body);
+    restorePanelAnchor(anchor);
     changed();
+    recordHistory(); // clicks (adding, moving, deleting…) are a step each; only typing is grouped
   }
 
   function renderTab(body) {
@@ -1630,6 +2470,7 @@
     else if (state.saving) return;
     else if (isDirty()) statusEl.textContent = `Unsaved changes${state.pending.size ? ` · ${state.pending.size} file(s) to upload` : ''}. The page behind shows a preview.`;
     else statusEl.textContent = state.note || 'Everything is saved.';
+    statusEl.title = statusEl.textContent; // the line is cut short when it doesn't fit
   }
 
   // ---------- Form helpers ----------
@@ -1728,6 +2569,175 @@
       else if (state.openItem === target) state.openItem = index;
     }
     rerenderTab();
+  }
+
+  // ---------- Drag to reorder ----------
+  // Rows of one list share a group. Only the ⠿ handle starts a drag, so text in a row can still be
+  // selected. onDrop(fromKey, toKey, before) puts the dragged row's entry next to the one it was dropped on.
+  let dragging = null;
+
+  function sortable(row, handle, group, key, onDrop, horizontal) {
+    handle.addEventListener('pointerdown', () => { row.draggable = true; });
+    handle.addEventListener('pointerup', () => { row.draggable = false; });
+    const clear = () => document.querySelectorAll('.is-dragging, .drop-before, .drop-after').forEach((r) => r.classList.remove('is-dragging', 'drop-before', 'drop-after'));
+    row.addEventListener('dragstart', (e) => {
+      if (!row.draggable || e.target !== row) return;
+      dragging = { group, key };
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(key));
+      row.classList.add('is-dragging');
+    });
+    row.addEventListener('dragend', () => {
+      dragging = null;
+      row.draggable = false;
+      clear();
+    });
+    row.addEventListener('dragover', (e) => {
+      if (!dragging || dragging.group !== group || dragging.key === key) return;
+      e.preventDefault();
+      e.stopPropagation(); // a list inside a section row: the section row doesn't react too
+      const box = row.getBoundingClientRect();
+      const before = horizontal ? e.clientX < box.left + box.width / 2 : e.clientY < box.top + Math.min(box.height / 2, 28);
+      row.classList.toggle('drop-before', before);
+      row.classList.toggle('drop-after', !before);
+    });
+    row.addEventListener('dragleave', (e) => { if (!row.contains(e.relatedTarget)) row.classList.remove('drop-before', 'drop-after'); });
+    row.addEventListener('drop', (e) => {
+      if (!dragging || dragging.group !== group || dragging.key === key) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const before = row.classList.contains('drop-before');
+      const from = dragging.key;
+      dragging = null;
+      clear();
+      onDrop(from, key, before);
+    });
+    return row;
+  }
+
+  // Moves arr[from] to just before or after what is now arr[to]
+  function moveTo(arr, from, to, before) {
+    const [entry] = arr.splice(from, 1);
+    const at = to - (from < to ? 1 : 0);
+    arr.splice(at + (before ? 0 : 1), 0, entry);
+  }
+
+  // ---------- Lists of entries ----------
+  // Quotes, logos, numbers, questions: one line each; click one to open its form. Drag ⠿ or use the
+  // arrows to move it, ⧉ to duplicate it, ✕ to delete it.
+  let openEntry = null; // the entry whose form is open
+
+  function entryList(arr, { what, label, form, make }) {
+    const rows = arr.map((entry, i) => {
+      const isOpen = entry === openEntry;
+      const handle = h('span', { class: 'adm-handle', title: 'Drag to move', text: '⠿' });
+      const row = h('div', { class: `adm-entry${isOpen ? ' is-open' : ''}`, 'data-key': `${what}-${i}` },
+        h('div', { class: 'adm-entry-head' },
+          handle,
+          h('button', {
+            class: 'adm-entry-title',
+            type: 'button',
+            'aria-expanded': String(isOpen),
+            onclick: () => { openEntry = isOpen ? null : entry; rerenderTab(); },
+          }, h('span', { text: label(entry) || `(new ${what})` })),
+          h('div', { class: 'adm-row-controls' },
+            iconBtn('↑', 'Move up', () => move(arr, i, -1), i === 0),
+            iconBtn('↓', 'Move down', () => move(arr, i, 1), i === arr.length - 1),
+            iconBtn('⧉', `Duplicate this ${what}`, () => {
+              const copy = clone(entry);
+              arr.splice(i + 1, 0, copy);
+              openEntry = copy;
+              rerenderTab();
+            }),
+            iconBtn('✕', `Delete this ${what}`, () => {
+              if (!confirm(`Delete this ${what}?`)) return;
+              arr.splice(i, 1);
+              rerenderTab();
+            }))),
+        isOpen ? h('div', { class: 'adm-form' }, form(entry, i)) : null);
+      return sortable(row, handle, `entries-${what}`, i, (from, to, before) => { moveTo(arr, from, to, before); rerenderTab(); });
+    });
+    return h('div', { class: 'adm-field' },
+      rows.length ? h('div', { class: 'adm-entry-list' }, rows) : h('p', { class: 'adm-hint', text: `No ${what}s yet.` }),
+      h('div', null, h('button', {
+        class: 'adm-btn',
+        type: 'button',
+        text: `+ Add ${what}`,
+        onclick: () => {
+          const entry = make();
+          arr.push(entry);
+          openEntry = entry;
+          rerenderTab();
+        },
+      })));
+  }
+
+  // A field that isn't a <label> (clicking its label would otherwise press the first button inside it)
+  function block(label, input, hint) {
+    return h('div', { class: 'adm-field' }, h('span', { class: 'adm-label', text: label }), input, hint ? h('span', { class: 'adm-hint', text: hint }) : null);
+  }
+
+  // A text box with buttons for the simple formatting the page understands (see richText in js/main.js)
+  const FORMAT_HINT = 'Leave an empty line between paragraphs. **bold**, *italic*, [link text](https://…), and lines starting with "- " make a list.';
+
+  function richArea(obj, key, rows) {
+    const box = area(obj, key, rows);
+    const typed = () => box.dispatchEvent(new Event('input', { bubbles: true }));
+    const wrap = (before, after, placeholder) => {
+      const { selectionStart: a, selectionEnd: b, value } = box;
+      const inner = value.slice(a, b) || placeholder;
+      box.value = value.slice(0, a) + before + inner + after + value.slice(b);
+      box.focus();
+      box.setSelectionRange(a + before.length, a + before.length + inner.length);
+      typed();
+    };
+    // Every line in the selection becomes a list item (or stops being one)
+    const listLines = () => {
+      const { value } = box;
+      const start = value.lastIndexOf('\n', box.selectionStart - 1) + 1;
+      const endAt = value.indexOf('\n', box.selectionEnd);
+      const end = endAt < 0 ? value.length : endAt;
+      const lines = value.slice(start, end).split('\n');
+      const isList = lines.every((line) => /^\s*-\s+/.test(line));
+      const next = lines.map((line) => (isList ? line.replace(/^\s*-\s+/, '') : `- ${line}`)).join('\n');
+      box.value = value.slice(0, start) + next + value.slice(end);
+      box.focus();
+      box.setSelectionRange(start, start + next.length);
+      typed();
+    };
+    const link = () => {
+      const url = prompt('Link address (https://…, mailto:… or #contact)');
+      if (url && url.trim()) wrap('[', `](${url.trim().replace(/\s/g, '%20')})`, 'link text');
+    };
+    // mousedown is stopped so the text box keeps its selection
+    const tool = (label, title, run) => h('button', { class: 'adm-tool', type: 'button', text: label, title, 'aria-label': title, onmousedown: (e) => e.preventDefault(), onclick: run });
+    return h('div', { class: 'adm-rich' },
+      h('div', { class: 'adm-tools' },
+        tool('B', 'Bold', () => wrap('**', '**', 'bold text')),
+        tool('I', 'Italic', () => wrap('*', '*', 'italic text')),
+        tool('Link', 'Link', link),
+        tool('• List', 'List', listLines)),
+      box);
+  }
+
+  // Buttons of a Text or Call-to-action section
+  function buttonsEditor(buttons) {
+    return h('div', { class: 'adm-field' },
+      h('div', { class: 'adm-section-head' },
+        h('span', { class: 'adm-label', text: 'Buttons' }),
+        h('button', {
+          class: 'adm-btn',
+          type: 'button',
+          text: '+ Add button',
+          onclick: () => { buttons.push({ label: '', url: '', style: buttons.length ? 'ghost' : 'primary' }); rerenderTab(); },
+        })),
+      buttons.length ? null : h('span', { class: 'adm-hint', text: 'No buttons. A button needs a label and a link (https://…, or #contact for a section on the page).' }),
+      buttons.map((button, i) => h('div', { class: 'adm-button-row' },
+        text(button, 'label', { placeholder: 'Label, e.g. See my shop' }),
+        text(button, 'url', { placeholder: 'https://… or #contact' }),
+        h('select', { 'aria-label': 'Button style', onchange: (e) => { button.style = e.target.value; changed(); } },
+          [['primary', 'Filled'], ['ghost', 'Outline']].map(([value, label]) => h('option', { value, text: label, selected: button.style === value }))),
+        rowControls(buttons, i, 'button'))));
   }
 
   function filePicker(accept, onPick) {
@@ -2128,12 +3138,245 @@
     ['image', 'Your own pointer: an image you upload'],
   ];
 
+  // ---------- Cursor files: .cur / .ico and .ani (Windows), Xcursor (Linux themes) ----------
+  // Browsers can't show these, so the panel reads them when they're uploaded and saves the frames as one
+  // PNG strip, with each frame's time and the pixel that points (theme.cursor.frames); js/main.js plays it.
+  // Each frame: { image (ImageData or ImageBitmap), width, height, hotX, hotY, delay (ms) }
+  const ascii = (bytes, at, n = 4) => String.fromCharCode(...bytes.subarray(at, at + n));
+
+  function cursorKind(bytes) {
+    if (ascii(bytes, 0) === 'RIFF' && ascii(bytes, 8) === 'ACON') return 'ani';
+    if (ascii(bytes, 0) === 'Xcur') return 'xcursor';
+    if (bytes[0] === 0 && bytes[1] === 0 && (bytes[2] === 1 || bytes[2] === 2) && bytes[3] === 0) return 'cur';
+    return '';
+  }
+
+  // A bitmap inside a .cur / .ico: colours bottom row first, then a 1-bit mask of the transparent pixels
+  function decodeDib(bytes) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const headerSize = dv.getUint32(0, true);
+    const width = dv.getInt32(4, true);
+    const height = Math.abs(dv.getInt32(8, true)) / 2; // the colours and the mask are counted together
+    const bpp = dv.getUint16(14, true);
+    const used = headerSize >= 36 ? dv.getUint32(32, true) : 0;
+    const palette = headerSize;
+    const xor = palette + (bpp <= 8 ? (used || 1 << bpp) * 4 : 0);
+    const xorStride = Math.ceil((width * bpp) / 32) * 4;
+    const and = xor + xorStride * height;
+    const andStride = Math.ceil(width / 32) * 4;
+    const hasMask = and + andStride * height <= bytes.length;
+    const out = new ImageData(width, height);
+    let anyAlpha = false;
+    for (let y = 0; y < height; y++) {
+      const row = height - 1 - y;
+      for (let x = 0; x < width; x++) {
+        let r;
+        let g;
+        let b;
+        let a = 255;
+        const p = xor + row * xorStride;
+        if (bpp === 32) {
+          [b, g, r, a] = [bytes[p + x * 4], bytes[p + x * 4 + 1], bytes[p + x * 4 + 2], bytes[p + x * 4 + 3]];
+          if (a) anyAlpha = true;
+        } else if (bpp === 24) {
+          [b, g, r] = [bytes[p + x * 3], bytes[p + x * 3 + 1], bytes[p + x * 3 + 2]];
+        } else {
+          const bit = x * bpp;
+          const index = (bytes[p + (bit >> 3)] >> (8 - bpp - (bit & 7))) & ((1 << bpp) - 1);
+          [b, g, r] = [bytes[palette + index * 4], bytes[palette + index * 4 + 1], bytes[palette + index * 4 + 2]];
+        }
+        const masked = hasMask && (bytes[and + row * andStride + (x >> 3)] >> (7 - (x & 7))) & 1;
+        out.data.set([r, g, b, bpp === 32 ? a : masked ? 0 : 255], (y * width + x) * 4);
+      }
+    }
+    // Old 32-bit cursors leave the alpha empty and use the mask instead
+    if (bpp === 32 && !anyAlpha) {
+      for (let y = 0; y < height; y++) {
+        const row = height - 1 - y;
+        for (let x = 0; x < width; x++) {
+          const masked = hasMask && (bytes[and + row * andStride + (x >> 3)] >> (7 - (x & 7))) & 1;
+          out.data[(y * width + x) * 4 + 3] = masked ? 0 : 255;
+        }
+      }
+    }
+    return out;
+  }
+
+  // .cur / .ico: a list of pictures in several sizes; the biggest is used. A .cur says where it points.
+  async function decodeIconFile(bytes) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const isCur = dv.getUint16(2, true) === 2;
+    const count = dv.getUint16(4, true);
+    let best = null;
+    for (let i = 0; i < count; i++) {
+      const e = 6 + i * 16;
+      if (e + 16 > bytes.length) break;
+      const entry = {
+        width: bytes[e] || 256,
+        height: bytes[e + 1] || 256,
+        hotX: isCur ? dv.getUint16(e + 4, true) : null,
+        hotY: isCur ? dv.getUint16(e + 6, true) : null,
+        size: dv.getUint32(e + 8, true),
+        offset: dv.getUint32(e + 12, true),
+      };
+      if (!best || entry.width > best.width) best = entry;
+    }
+    if (!best) throw new Error('This cursor file has no pictures in it.');
+    const data = bytes.subarray(best.offset, best.offset + best.size);
+    let image;
+    if (data[0] === 0x89 && ascii(data, 1, 3) === 'PNG') image = await createImageBitmap(new Blob([data], { type: 'image/png' }));
+    else image = decodeDib(data);
+    return { image, width: image.width, height: image.height, hotX: best.hotX, hotY: best.hotY, delay: 0 };
+  }
+
+  // .ani: a RIFF file with its timing ("anih", "rate", "seq ") and its frames, each a .cur / .ico ("LIST fram")
+  async function decodeAni(bytes) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let rate = 6;
+    let rates = null;
+    let seq = null;
+    const icons = [];
+    for (let pos = 12; pos + 8 <= bytes.length;) {
+      const id = ascii(bytes, pos);
+      const size = dv.getUint32(pos + 4, true);
+      const body = pos + 8;
+      const words = () => Array.from({ length: Math.floor(size / 4) }, (_, i) => dv.getUint32(body + i * 4, true));
+      if (id === 'anih') rate = dv.getUint32(body + 28, true) || 6;
+      else if (id === 'rate') rates = words();
+      else if (id === 'seq ') seq = words();
+      else if (id === 'LIST' && ascii(bytes, body) === 'fram') {
+        for (let p = body + 4; p + 8 <= Math.min(body + size, bytes.length);) {
+          const chunkSize = dv.getUint32(p + 4, true);
+          if (ascii(bytes, p) === 'icon') icons.push(bytes.subarray(p + 8, p + 8 + chunkSize));
+          p += 8 + chunkSize + (chunkSize & 1);
+        }
+      }
+      pos = body + size + (size & 1);
+    }
+    if (!icons.length) throw new Error('This .ani file has no frames in it.');
+    const pictures = await Promise.all(icons.map(decodeIconFile));
+    const steps = seq && seq.length ? seq.filter((i) => i < pictures.length) : pictures.map((_, i) => i);
+    // Times are in 1/60 s ("jiffies")
+    return steps.map((index, n) => ({ ...pictures[index], delay: (((rates && rates[n]) || rate) * 1000) / 60 }));
+  }
+
+  // Xcursor (a file from a Linux cursor theme): pictures in several sizes, each with its own time; the
+  // size closest to 48 px is used, with all of its frames
+  function decodeXcursor(bytes) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const count = dv.getUint32(12, true);
+    const images = [];
+    for (let i = 0; i < count; i++) {
+      const t = 16 + i * 12;
+      if (t + 12 > bytes.length) break;
+      if (dv.getUint32(t, true) !== 0xfffd0002) continue; // pictures (the other kind is comments)
+      const pos = dv.getUint32(t + 8, true);
+      images.push({
+        nominal: dv.getUint32(pos + 8, true),
+        width: dv.getUint32(pos + 16, true),
+        height: dv.getUint32(pos + 20, true),
+        hotX: dv.getUint32(pos + 24, true),
+        hotY: dv.getUint32(pos + 28, true),
+        delay: dv.getUint32(pos + 32, true),
+        pixels: pos + dv.getUint32(pos, true),
+      });
+    }
+    if (!images.length) throw new Error('This cursor file has no pictures in it.');
+    const sizes = [...new Set(images.map((img) => img.nominal))];
+    const size = sizes.sort((a, b) => Math.abs(a - 48) - Math.abs(b - 48) || b - a)[0];
+    return images.filter((img) => img.nominal === size).map((img) => {
+      const out = new ImageData(img.width, img.height);
+      for (let i = 0; i < img.width * img.height; i++) {
+        // ARGB, with the colours already multiplied by the alpha
+        const v = dv.getUint32(img.pixels + i * 4, true);
+        const a = v >>> 24;
+        const un = (c) => (a ? Math.min(255, Math.round((c * 255) / a)) : 0);
+        out.data.set([un((v >>> 16) & 255), un((v >>> 8) & 255), un(v & 255), a], i * 4);
+      }
+      return { image: out, width: img.width, height: img.height, hotX: img.hotX, hotY: img.hotY, delay: img.delay };
+    });
+  }
+
+  async function readCursorFile(file) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const kind = cursorKind(bytes);
+    if (kind === 'ani') return decodeAni(bytes);
+    if (kind === 'xcursor') return decodeXcursor(bytes);
+    if (kind === 'cur') return [await decodeIconFile(bytes)];
+    return null; // an ordinary picture
+  }
+
+  // All frames side by side in one PNG, each in a box as big as the biggest frame
+  async function cursorStrip(frames) {
+    const width = Math.max(...frames.map((f) => f.width));
+    const height = Math.max(...frames.map((f) => f.height));
+    const canvas = h('canvas', { width: width * frames.length, height });
+    const ctx = canvas.getContext('2d');
+    frames.forEach((f, i) => {
+      if (f.image instanceof ImageData) ctx.putImageData(f.image, i * width, 0);
+      else ctx.drawImage(f.image, i * width, 0);
+    });
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('This browser could not turn the cursor into a picture.');
+    return { blob, width, height };
+  }
+
+  // Uploading a pointer: a cursor file becomes a strip of frames; anything else is used as it is
+  async function pickCursor(cur, file) {
+    let frames;
+    try {
+      frames = await readCursorFile(file);
+    } catch (error) {
+      alert(`${file.name} couldn’t be read as a cursor: ${error.message}`);
+      return;
+    }
+    if (!frames) {
+      const path = stageFile(file, `assets/cursor-${Date.now().toString(36)}${extension(file) || '.png'}`);
+      if (!path) return;
+      cur.image = path;
+      delete cur.frames;
+      if (cur.tip === 'hotspot') cur.tip = 'center';
+      rerenderTab();
+      return;
+    }
+    const { blob, width, height } = await cursorStrip(frames);
+    const name = file.name.replace(/\.[^.]*$/, '') || 'cursor';
+    const path = stageFile(new File([blob], `${name}.png`, { type: 'image/png' }), `assets/cursor-${slug(name)}-${Date.now().toString(36)}.png`);
+    if (!path) return;
+    const first = frames[0];
+    cur.image = path;
+    cur.frames = {
+      count: frames.length,
+      width,
+      height,
+      delays: frames.map((f) => Math.round(f.delay) || 100),
+      hotX: Number.isFinite(first.hotX) ? first.hotX : null,
+      hotY: Number.isFinite(first.hotY) ? first.hotY : null,
+    };
+    if (cur.frames.hotX !== null) cur.tip = 'hotspot';
+    cur.size = Math.min(Math.max(width, 16), 96);
+    rerenderTab();
+  }
+
+  // The uploaded pointer as it moves: the strip, one frame at a time
+  function cursorPreview(cur) {
+    const src = cur.image ? (window.SITE_ASSET_OVERRIDES[cur.image] || cur.image) : '';
+    if (!src) return null;
+    const frames = cur.frames && cur.frames.count > 1 ? cur.frames : null;
+    if (!frames) return h('img', { class: 'adm-cursor-preview', src, alt: '' });
+    const box = h('span', { class: 'adm-cursor-preview adm-cursor-anim', role: 'img', 'aria-label': `${frames.count} frames` });
+    box.style.backgroundImage = `url("${src}")`;
+    box.style.setProperty('--frames', frames.count);
+    box.style.setProperty('--ratio', frames.height / frames.width);
+    box.style.setProperty('--duration', `${frames.delays.reduce((sum, d) => sum + d, 0)}ms`);
+    return box;
+  }
+
   function cursorBox(theme) {
     const cur = theme.cursor;
     const style = cur.style;
     const colour = () => choice(cur, 'color', 'Colour', [['invert', 'Inverted (shows on anything)'], ['accent', 'Main accent'], ['accent2', 'Second accent']]);
     const grow = (label) => check(cur, 'grow', label || 'Grow over links and buttons');
-    const preview = cur.image ? (window.SITE_ASSET_OVERRIDES[cur.image] || cur.image) : '';
     return h('div', { class: 'adm-form adm-group-box', 'data-adm-section': 'cursor' },
       h('h3', { class: 'adm-group', text: 'Mouse effect' }),
       field('Style', h('select', {
@@ -2161,16 +3404,15 @@
         h('div', { class: 'adm-field' },
           h('span', { class: 'adm-label', text: 'Pointer image' }),
           h('div', { class: 'adm-inline' },
-            preview ? h('img', { class: 'adm-cursor-preview', src: preview, alt: '' }) : null,
-            currentFile(cur.image),
-            cur.image ? h('button', { class: 'adm-link', type: 'button', text: 'Remove', onclick: () => { cur.image = ''; rerenderTab(); } }) : null),
-          filePicker('image/png,image/svg+xml,image/gif,image/webp,.png,.svg,.gif,.webp', (file) => {
-            const path = stageFile(file, `assets/cursor-${Date.now().toString(36)}${extension(file) || '.png'}`);
-            if (path) { cur.image = path; rerenderTab(); }
-          }),
-          h('span', { class: 'adm-hint', text: 'A PNG or SVG with a transparent background works best. Until there is one, a dot is shown.' })),
+            cursorPreview(cur),
+            cur.frames ? h('span', { class: 'adm-hint', text: cur.frames.count > 1 ? `Animated, ${cur.frames.count} frames` : 'From a cursor file' }) : currentFile(cur.image),
+            cur.image ? h('button', { class: 'adm-link', type: 'button', text: 'Remove', onclick: () => { cur.image = ''; delete cur.frames; if (cur.tip === 'hotspot') cur.tip = 'center'; rerenderTab(); } }) : null),
+          filePicker('image/png,image/svg+xml,image/gif,image/webp,.png,.svg,.gif,.webp,.ani,.cur,.ico', (file) => pickCursor(cur, file)),
+          h('span', { class: 'adm-hint', text: 'A PNG or SVG with a transparent background, or a cursor file: .cur or animated .ani (Windows), or a file from a Linux cursor theme (Xcursor, e.g. left_ptr from the theme’s cursors folder; choose “All files” to see it). Animations play at their own speed. Until there is one, a dot is shown.' })),
         slider(cur, 'size', 'Size', 16, 96, 2, ' px'),
-        choice(cur, 'tip', 'Where it points', [['center', 'The middle of the image'], ['top-left', 'The top-left corner (for arrow shapes)']]),
+        choice(cur, 'tip', 'Where it points', [
+          ...(cur.frames && cur.frames.hotX !== null ? [['hotspot', 'Where the cursor file says']] : []),
+          ['center', 'The middle of the image'], ['top-left', 'The top-left corner (for arrow shapes)']]),
         grow('Grow a little over links and buttons'),
       ] : null,
       check(cur, 'magnetic', 'Magnetic buttons: buttons drift a little toward the mouse'),
@@ -2189,7 +3431,20 @@
     experience: ['experience.title'],
     toolkit: ['toolkit.title'],
   };
-  const KIND_LABELS = { hero: 'Top', about: 'About', reel: 'Video', work: 'Work', grid: 'Work', experience: 'Timeline', toolkit: 'Toolkit', contact: 'Contact', text: 'Text', footer: 'Footer' };
+  const KIND_LABELS = { hero: 'Top', about: 'About', reel: 'Showreel', work: 'Work', grid: 'Work', experience: 'Timeline', toolkit: 'Toolkit', contact: 'Contact', footer: 'Footer',
+    text: 'Text', gallery: 'Gallery', video: 'Video', quotes: 'Quotes', logos: 'Logos', numbers: 'Numbers', faq: 'FAQ', cta: 'Call to action' };
+  // What "+ Add section" offers: [kind, button, what it is, title it starts with]
+  const NEW_SECTIONS = [
+    ['text', 'Text', 'A title, text with formatting, a picture and buttons', 'New section'],
+    ['gallery', 'Gallery', 'A grid of pictures that open big', 'Gallery'],
+    ['video', 'Video', 'One video, from YouTube or a file', 'Video'],
+    ['quotes', 'Testimonials', 'Quotes from clients, with their name and photo', 'Kind words'],
+    ['logos', 'Logos', 'A row of client or partner logos', 'Worked with'],
+    ['numbers', 'Numbers', 'A few big figures, e.g. 120+ videos edited', 'In numbers'],
+    ['faq', 'FAQ', 'Questions that open to show their answer', 'Questions'],
+    ['cta', 'Call to action', 'One big line with a button', ''],
+    ['grid', 'Work grid', 'Projects from the categories you pick', 'More work'],
+  ];
 
   // The built-in text for a spot, in the language being edited (shown as the placeholder)
   function uiDefault(key) {
@@ -2205,7 +3460,8 @@
     const own = (state.draft.sections[id] || {}).title;
     if (own && own.trim()) return own.trim();
     if (SECTION_KEYS[id]) return uiDefault(SECTION_KEYS[id][0]) || SECTION_NAMES[id];
-    return kindOf(id) === 'grid' ? uiDefault('work.title') : '(untitled section)';
+    const kind = kindOf(id);
+    return kind === 'grid' ? uiDefault('work.title') : kind === 'text' ? '(untitled section)' : KIND_LABELS[kind];
   }
 
   // Ticks for parts of a section that can be taken off the page (index.html marks them with data-part)
@@ -2226,23 +3482,99 @@
         h('span', { text: label })))));
   }
 
-  // The same first block for every section: title, menu, background and title look
+  // The same first blocks for every section: title, menu and link, then its look and layout
   function sectionBasics(id) {
     const set = state.draft.sections[id];
     const keys = SECTION_KEYS[id];
     const titleHint = keys ? uiDefault(keys[0]) : kindOf(id) === 'grid' ? uiDefault('work.title') : '';
     const navHint = keys && keys[1] ? uiDefault(keys[1]) : set.title || titleHint || 'Same as the title';
-    return h('div', { class: 'adm-form adm-group-box' },
-      h('h3', { class: 'adm-group', text: 'Section' }),
-      h('div', { class: 'adm-row2' },
-        field('Title', text(set, 'title', { placeholder: titleHint, onchange: () => rerenderTab() })),
-        field('Menu label', text(set, 'nav', { placeholder: navHint }))),
-      check(set, 'inMenu', 'Show in the menu'),
-      h('div', { class: 'adm-row2' },
-        choice(set, 'background', 'Background', [['main', 'Page background'], ['alt', 'Second background']]),
-        choice(set, 'titleStyle', 'Title style', [['large', 'Large, with a dot'], ['small', 'Small, with a line']])),
-      slider(set, 'titleSize', 'Title size', 40, 200, 5, '%',
-        'A small title on the same background as the section above makes it read as part of that section.'));
+    return [
+      h('div', { class: 'adm-form adm-group-box' },
+        h('h3', { class: 'adm-group', text: 'Section' }),
+        h('div', { class: 'adm-row2' },
+          field('Title', text(set, 'title', { placeholder: titleHint, onchange: () => rerenderTab() })),
+          field('Menu label', text(set, 'nav', { placeholder: navHint }))),
+        check(set, 'inMenu', 'Show in the menu'),
+        anchorField(id, set)),
+      kindOf(id) !== 'text' && layoutOptions(id) ? h('div', { class: 'adm-form adm-group-box' },
+        h('h3', { class: 'adm-group', text: 'Layout' }),
+        layoutPicker(id, layoutOptions(id))) : null,
+      lookBox(id, set),
+    ];
+  }
+
+  // The name at the end of the section's address (#services), for links from elsewhere
+  const anchorSlug = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^[^a-z]+|-+$/g, '').slice(0, 40);
+
+  function anchorField(id, set) {
+    const note = h('span', { class: 'adm-hint' });
+    const showNote = () => {
+      const c = state.draft;
+      const name = set.anchor;
+      const taken = name && name !== id && (allSectionIds(c).includes(name)
+        || Object.entries(c.sections).some(([sid, other]) => sid !== id && other && other.anchor === name)
+        || (document.getElementById(name) && !document.getElementById(name).closest(`#${id}`)));
+      note.className = taken ? 'adm-error' : 'adm-hint';
+      note.textContent = taken
+        ? `“${name}” is already used on the page, so the section keeps #${id}.`
+        : `Its address: ${siteAddress(c.site) || ''}#${name || id}. Use it in buttons and links, e.g. #${name || id}.`;
+    };
+    showNote();
+    return h('div', { class: 'adm-field' },
+      field('Link name', h('input', {
+        type: 'text',
+        value: set.anchor || '',
+        placeholder: id,
+        onchange: (e) => {
+          set.anchor = anchorSlug(e.target.value);
+          e.target.value = set.anchor;
+          showNote();
+          changed();
+        },
+      })),
+      note);
+  }
+
+  // Background, title look, width, spacing and devices; folded away until needed
+  let lookOpen = false;
+
+  function lookBox(id, set) {
+    const background = h('select', {
+      onchange: (e) => {
+        set.background = e.target.value;
+        if (set.background === 'custom' && !isHex(set.bgColor)) set.bgColor = '#1d2633';
+        rerenderTab();
+      },
+    }, [['main', 'Page background'], ['alt', 'Second background'], ['custom', 'Your own colour or picture']]
+      .map(([value, label]) => h('option', { value, text: label, selected: set.background === value })));
+    return h('details', { class: 'adm-group-box adm-more', open: lookOpen, ontoggle: (e) => { lookOpen = e.currentTarget.open; } },
+      h('summary', { class: 'adm-group', text: 'Look and layout' }),
+      h('div', { class: 'adm-form' },
+        h('div', { class: 'adm-row2' },
+          field('Background', background),
+          choice(set, 'titleStyle', 'Title style', [['large', 'Large, with a dot'], ['small', 'Small, with a line']])),
+        set.background === 'custom' ? customBackground(id, set) : null,
+        slider(set, 'titleSize', 'Title size', 40, 200, 5, '%',
+          'A small title on the same background as the section above makes it read as part of that section.'),
+        h('div', { class: 'adm-row3' },
+          choice(set, 'width', 'Width', [['normal', 'Normal'], ['narrow', 'Narrow'], ['wide', 'Wide'], ['full', 'Full width']]),
+          choice(set, 'spacing', 'Space around', [['normal', 'Normal'], ['compact', 'Compact'], ['roomy', 'Roomy']]),
+          choice(set, 'device', 'Show on', [['all', 'All screens'], ['desktop', 'Computers only'], ['phone', 'Phones only']])),
+        partsBox(id)));
+  }
+
+  function customBackground(id, set) {
+    return h('div', { class: 'adm-form' },
+      h('div', { class: 'adm-field' },
+        h('span', { class: 'adm-label', text: 'Colour' }),
+        h('div', { class: 'adm-inline' },
+          h('input', { type: 'color', value: isHex(set.bgColor) ? set.bgColor : '#1d2633', oninput: (e) => { set.bgColor = e.target.value; changed(); } }),
+          h('span', { class: 'adm-hint', text: 'The text turns light or dark to read on it.' }))),
+      fileField('Picture (optional)', set.bgImage, 'image/*', (file) => {
+        const path = stageFile(file, `assets/sections/bg-${slug(sectionLabel(id))}-${Date.now().toString(36)}${extension(file)}`);
+        if (path) { set.bgImage = path; rerenderTab(); }
+      }, () => { set.bgImage = ''; rerenderTab(); }, 'Covers the whole section, darkened so light text reads on it.'),
+      set.bgImage ? slider(set, 'bgDarken', 'Darken the picture', 0, 90, 5, '%') : null);
   }
 
   function fileField(label, path, accept, onPick, onRemove, hint, section) {
@@ -2297,22 +3629,134 @@
     ];
   }
 
+  // ---------- Added sections (Text, Gallery, Video, …) ----------
+  // Name a new upload after the section, e.g. assets/sections/clients-logo-lx3k9.png
+  const sectionFile = (sec, part, file) => stageFile(file, `assets/sections/${slug(sectionLabel(sec.id))}-${part}-${Date.now().toString(36)}${extension(file)}`);
+
+  const alignChoice = (sec) => choice(sec, 'align', 'Alignment', [['left', 'Left'], ['center', 'Centred']]);
+
+  function introField(sec) {
+    return h('div', { class: 'adm-row2' }, field('Intro line (optional)', area(sec, 'intro', 2)), alignChoice(sec));
+  }
+
   function textEditor(sec) {
     return h('div', { class: 'adm-form' },
-      field('Text', area(sec, 'text', 6), 'Leave an empty line between paragraphs.'),
+      block('Text', richArea(sec, 'text', 7), FORMAT_HINT),
+      h('div', { class: 'adm-row2' },
+        alignChoice(sec),
+        choice(sec, 'columns', 'Text in', [[1, 'One column'], [2, 'Two columns']])),
       fileField('Picture (optional)', sec.image, 'image/*', (file) => {
-        const path = stageFile(file, `assets/sections/${slug(state.draft.sections[sec.id].title)}-${Date.now().toString(36)}${extension(file)}`);
+        const path = sectionFile(sec, 'picture', file);
         if (path) { sec.image = path; rerenderTab(); }
       }, () => { sec.image = ''; rerenderTab(); }),
-      sec.image ? h('div', { class: 'adm-row2' },
-        choice(sec, 'imagePlace', 'Picture position', [['below', 'Below the text'], ['side', 'Beside the text']]),
-        field('Picture description (for screen readers)', text(sec, 'imageAlt'))) : null,
-      h('div', { class: 'adm-field' },
-        h('span', { class: 'adm-label', text: 'Button (optional)' }),
-        h('div', { class: 'adm-row2' },
-          text(sec.button, 'label', { placeholder: 'Label, e.g. See my shop' }),
-          text(sec.button, 'url', { type: 'url', placeholder: 'https://… or #contact' }))));
+      sec.image ? block('Picture position', layoutPicker(sec.id, layoutOptions(sec.id))) : null,
+      sec.image ? field('Picture description (for screen readers)', text(sec, 'imageAlt')) : null,
+      buttonsEditor(sec.buttons));
   }
+
+  function galleryEditor(sec) {
+    return h('div', { class: 'adm-form' },
+      introField(sec),
+      h('div', { class: 'adm-row2' },
+        choice(sec, 'shape', 'Picture shape', [['square', 'Square'], ['wide', 'Landscape'], ['natural', 'Their own shape']]),
+        slider(sec, 'columns', 'Pictures per row', 2, 5, 1, '', 'Phones show two per row.')),
+      picturesField(sec.images, sectionLabel(sec.id), {
+        captions: true,
+        folder: 'sections',
+        empty: 'Visitors click a picture to see it big, and go through the others with the arrows. You can pick several files at once.',
+      }));
+  }
+
+  function videoEditor(sec) {
+    const { modeSelect, source } = videoSource(sec, sectionLabel(sec.id), 'sections');
+    return h('div', { class: 'adm-form' },
+      introField(sec),
+      modeSelect,
+      source,
+      sec.youtube ? null : fileField('Cover picture (optional)', sec.thumb, 'image/*', (file) => {
+        const path = sectionFile(sec, 'cover', file);
+        if (path) { sec.thumb = path; rerenderTab(); }
+      }, () => { sec.thumb = ''; rerenderTab(); }, 'Shown until the video plays.'),
+      field('Caption (optional)', text(sec, 'caption'), 'A line under the video.'));
+  }
+
+  function quotesEditor(sec) {
+    return h('div', { class: 'adm-form' },
+      introField(sec),
+      entryList(sec.items, {
+        what: 'quote',
+        label: (item) => [item.name, item.quote.slice(0, 50)].filter(Boolean).join(': '),
+        make: () => ({ ...ITEM_FIELDS.quotes }),
+        form: (item) => [
+          block('Quote', richArea(item, 'quote', 3)),
+          h('div', { class: 'adm-row2' },
+            field('Name', text(item, 'name', { placeholder: 'e.g. Sam Janssens' })),
+            field('Role or company', text(item, 'role', { placeholder: 'e.g. Producer, StartupAwards' }))),
+          fileField('Photo (optional)', item.photo, 'image/*', (file) => {
+            const path = sectionFile(sec, 'person', file);
+            if (path) { item.photo = path; rerenderTab(); }
+          }, () => { item.photo = ''; rerenderTab(); }, 'A small round picture beside the name.'),
+        ],
+      }));
+  }
+
+  function logosEditor(sec) {
+    return h('div', { class: 'adm-form' },
+      introField(sec),
+      choice(sec, 'style', 'Logos shown', [['grey', 'In grey, in colour when pointed at'], ['color', 'In colour'], ['white', 'All white'], ['black', 'All black']],
+        'All white or all black makes logos of different colours look like one set. PNG or SVG with a transparent background works best.'),
+      entryList(sec.items, {
+        what: 'logo',
+        label: (item) => item.alt || (item.src ? item.src.split('/').pop() : ''),
+        make: () => ({ ...ITEM_FIELDS.logos }),
+        form: (item) => [
+          fileField('Logo', item.src, 'image/*', (file) => {
+            const path = sectionFile(sec, 'logo', file);
+            if (path) { item.src = path; rerenderTab(); }
+          }, () => { item.src = ''; rerenderTab(); }),
+          h('div', { class: 'adm-row2' },
+            field('Name (for screen readers)', text(item, 'alt', { placeholder: 'e.g. StartupAwards' })),
+            field('Link (optional)', text(item, 'url', { type: 'url', placeholder: 'https://…' }))),
+        ],
+      }));
+  }
+
+  function numbersEditor(sec) {
+    return h('div', { class: 'adm-form' },
+      introField(sec),
+      entryList(sec.items, {
+        what: 'number',
+        label: (item) => [item.value, item.label].filter(Boolean).join(' '),
+        make: () => ({ ...ITEM_FIELDS.numbers }),
+        form: (item) => h('div', { class: 'adm-row2' },
+          field('Number', text(item, 'value', { placeholder: 'e.g. 120+' })),
+          field('What it counts', text(item, 'label', { placeholder: 'e.g. videos edited' }))),
+      }));
+  }
+
+  function faqEditor(sec) {
+    return h('div', { class: 'adm-form' },
+      introField(sec),
+      entryList(sec.items, {
+        what: 'question',
+        label: (item) => item.q,
+        make: () => ({ ...ITEM_FIELDS.faq }),
+        form: (item) => [
+          field('Question', text(item, 'q', { placeholder: 'e.g. How long does a project take?' })),
+          block('Answer', richArea(item, 'a', 4)),
+        ],
+      }));
+  }
+
+  function ctaEditor(sec) {
+    return h('div', { class: 'adm-form' },
+      field('Big line', area(sec, 'text', 2), 'e.g. Let’s make something together.'),
+      field('Line under it (optional)', area(sec, 'sub', 2)),
+      alignChoice(sec),
+      buttonsEditor(sec.buttons));
+  }
+
+  const SECTION_EDITORS = { text: textEditor, gallery: galleryEditor, video: videoEditor, quotes: quotesEditor, logos: logosEditor, numbers: numbersEditor, faq: faqEditor, cta: ctaEditor };
 
   // Which Work section a project shows up in first (for the ✎ on a card)
   function gridForProject(index) {
@@ -2365,50 +3809,106 @@
     ];
   }
 
-  // The projects in one Work section; moving swaps with the neighbour shown here
+  // A list of projects: one Work section's, or all of them. Drag ⠿ to move one, or use the arrows (which
+  // swap it with the neighbour shown here); ⧉ duplicates it. The search box filters the list as you type.
+  let projectQuery = '';
+
   function projectsList(entries, newType) {
     const work = state.draft.work;
-    const swap = (a, b) => {
-      [work[a], work[b]] = [work[b], work[a]];
-      if (state.openItem === a) state.openItem = b;
-      else if (state.openItem === b) state.openItem = a;
+    // Changes the order, keeping the open project open
+    const reorder = (change) => {
+      const open = work[state.openItem];
+      change();
+      state.openItem = open ? work.indexOf(open) : null;
       rerenderTab();
     };
+    const swap = (a, b) => reorder(() => { [work[a], work[b]] = [work[b], work[a]]; });
+    const add = (atEnd) => {
+      const item = normalizeWork({ type: newType, title: 'New project', teaser: 'One line about it.' });
+      if (atEnd) work.push(item);
+      else work.unshift(item);
+      state.openItem = work.indexOf(item);
+      projectQuery = '';
+      rerenderTab();
+    };
+    const matches = (item) => {
+      const query = projectQuery.trim().toLowerCase();
+      return !query || [item.title, item.client, item.year, item.role, item.teaser, categoryName(item.type)].join(' ').toLowerCase().includes(query);
+    };
+
+    const list = h('div', { class: 'adm-entry-list' });
+    const noMatch = h('p', { class: 'adm-hint', text: 'No projects match.', hidden: true });
+    const filter = () => {
+      let shown = 0;
+      list.querySelectorAll(':scope > .adm-entry').forEach((row) => {
+        row.hidden = !matches(work[Number(row.dataset.index)]);
+        if (!row.hidden) shown += 1;
+      });
+      noMatch.hidden = shown > 0 || !entries.length;
+    };
+
+    entries.forEach(({ item, index }, n) => {
+      const isOpen = state.openItem === index;
+      const handle = h('span', { class: 'adm-handle', title: 'Drag to move', text: '⠿' });
+      const badge = [categoryName(item.type), item.featured ? 'featured' : '', item.draft ? 'draft' : ''].filter(Boolean).join(' · ');
+      const row = h('div', { class: `adm-entry${isOpen ? ' is-open' : ''}${item.draft ? ' is-draft' : ''}`, 'data-index': index },
+        h('div', { class: 'adm-entry-head' },
+          handle,
+          h('button', {
+            class: 'adm-entry-title',
+            type: 'button',
+            'aria-expanded': String(isOpen),
+            onclick: () => { state.openItem = isOpen ? null : index; rerenderTab(); },
+          }, h('span', { class: 'adm-badge', text: badge }), bind(h('span', { text: item.title || '(untitled)' }), item, 'title', '(untitled)')),
+          h('div', { class: 'adm-row-controls' },
+            iconBtn('↑', 'Move up', () => swap(index, entries[n - 1].index), n === 0),
+            iconBtn('↓', 'Move down', () => swap(index, entries[n + 1].index), n === entries.length - 1),
+            iconBtn('⧉', 'Duplicate project', () => {
+              const copy = clone(item);
+              copy.title = item.title ? `${item.title} (copy)` : '';
+              work.splice(index + 1, 0, copy);
+              state.openItem = index + 1;
+              rerenderTab();
+            }),
+            iconBtn('✕', 'Delete project', () => {
+              if (!confirm('Delete this project?')) return;
+              reorder(() => work.splice(index, 1));
+            }))),
+        isOpen ? workForm(item) : null);
+      list.appendChild(sortable(row, handle, 'projects', index, (from, to, before) => reorder(() => moveTo(work, from, to, before))));
+    });
+    filter();
+
     return h('div', { class: 'adm-form' },
       h('div', { class: 'adm-section-head' },
         h('span', { class: 'adm-label', text: `Projects (${entries.length})` }),
-        h('button', {
-          class: 'adm-btn adm-btn-primary',
-          type: 'button',
-          text: '+ Add project',
-          onclick: () => {
-            work.unshift(normalizeWork({ type: newType, title: 'New project', teaser: 'One line about it.' }));
-            state.openItem = 0;
-            rerenderTab();
-          },
-        })),
+        h('button', { class: 'adm-btn adm-btn-primary', type: 'button', text: '+ Add project', title: 'Adds it at the top', onclick: () => add(false) })),
+      entries.length > 4 ? h('input', {
+        type: 'search',
+        value: projectQuery,
+        placeholder: 'Search by title, client, year…',
+        'aria-label': 'Search projects',
+        oninput: (e) => { projectQuery = e.target.value; filter(); },
+      }) : null,
       entries.length ? null : h('p', { class: 'adm-hint', text: 'No projects here yet.' }),
-      entries.map(({ item, index }, n) => {
-        const isOpen = state.openItem === index;
-        return h('div', { class: `adm-entry${isOpen ? ' is-open' : ''}` },
-          h('div', { class: 'adm-entry-head' },
-            h('button', {
-              class: 'adm-entry-title',
-              type: 'button',
-              'aria-expanded': String(isOpen),
-              onclick: () => { state.openItem = isOpen ? null : index; rerenderTab(); },
-            }, h('span', { class: 'adm-badge', text: item.featured ? `${categoryName(item.type)} · featured` : categoryName(item.type) }), bind(h('span', { text: item.title || '(untitled)' }), item, 'title', '(untitled)')),
-            h('div', { class: 'adm-row-controls' },
-              iconBtn('↑', 'Move up', () => swap(index, entries[n - 1].index), n === 0),
-              iconBtn('↓', 'Move down', () => swap(index, entries[n + 1].index), n === entries.length - 1),
-              iconBtn('✕', 'Delete project', () => {
-                if (!confirm('Delete this project?')) return;
-                work.splice(index, 1);
-                state.openItem = null;
-                rerenderTab();
-              }))),
-          isOpen ? workForm(item) : null);
-      }));
+      list,
+      noMatch,
+      entries.length ? h('div', null, h('button', { class: 'adm-link', type: 'button', text: '+ Add a project at the end', onclick: () => add(true) })) : null);
+  }
+
+  // Every project in one list, whichever Work section shows it, with a category filter
+  function allProjectsView() {
+    const c = state.draft;
+    const cat = c.categories.some((x) => x.id === state.projectCategory) ? state.projectCategory : '';
+    const entries = c.work.map((item, index) => ({ item, index })).filter(({ item }) => !cat || item.type === cat);
+    return h('div', { class: 'adm-form' },
+      h('div', { class: 'adm-section-head' },
+        h('button', { class: 'adm-btn', type: 'button', text: '← Page outline', onclick: () => { state.allProjects = false; rerenderTab(); } }),
+        h('select', { 'aria-label': 'Category', class: 'adm-narrow', onchange: (e) => { state.projectCategory = e.target.value; rerenderTab(); } },
+          [['', 'All categories'], ...c.categories.map((x) => [x.id, x.label || x.id])]
+            .map(([value, label]) => h('option', { value, text: label, selected: cat === value })))),
+      h('p', { class: 'adm-help', text: 'All your projects, whichever Work section shows them. The order here is their order on the page.' }),
+      projectsList(entries, cat || (c.categories[0] || {}).id));
   }
 
   function editorFor(id) {
@@ -2419,12 +3919,21 @@
         partToggles([['footer.links', 'Links']]),
         h('p', { class: 'adm-hint', text: 'Choose which links appear here in the Site tab (“In footer”).' }));
     }
-    const body = { about: aboutEditor, reel: reelEditor, work: () => workEditor(id), grid: () => workEditor(id), experience: experienceTab, toolkit: toolkitTab, contact: contactEditor, text: () => textEditor(state.draft.customSections.find((s) => s.id === id)) }[kind]();
     const builtin = window.SiteSections.builtin.includes(id);
+    const added = state.draft.customSections.find((s) => s.id === id);
+    const body = added ? SECTION_EDITORS[kind](added)
+      : { about: aboutEditor, reel: reelEditor, work: () => workEditor(id), grid: () => workEditor(id), experience: experienceTab, toolkit: toolkitTab, contact: contactEditor }[kind]();
     return h('div', { class: 'adm-form' },
       sectionBasics(id),
       body,
       h('div', { class: 'adm-row-foot' },
+        builtin ? null : h('button', {
+          class: 'adm-btn',
+          type: 'button',
+          text: 'Duplicate section',
+          title: 'A copy right under it, with the same content and look',
+          onclick: () => duplicateSection(id),
+        }),
         h('button', {
           class: 'adm-btn adm-btn-danger',
           type: 'button',
@@ -2444,19 +3953,61 @@
     state.openRow = id;
   }
 
-  function addSection(kind) {
+  // What a new section of each kind starts with, so it shows on the page straight away
+  const SECTION_STARTERS = {
+    text: { text: 'Write something about this here.' },
+    quotes: { items: [{ quote: 'What a client said about working with you.', name: 'Their name', role: 'Their role, company' }] },
+    numbers: { items: [{ value: '120+', label: 'projects' }, { value: '8', label: 'years' }, { value: '40', label: 'happy clients' }] },
+    faq: { items: [{ q: 'A question people often ask?', a: 'The answer.' }] },
+    cta: { text: 'Let’s make something together.', buttons: [{ label: 'Get in touch', url: '#contact', style: 'primary' }] },
+  };
+
+  const newSectionId = (kind) => `${kind === 'grid' ? 'work' : 'section'}-${Date.now().toString(36)}`;
+
+  function addSection(kind, at) {
     const c = state.draft;
-    const id = `${kind === 'grid' ? 'work' : 'section'}-${Date.now().toString(36)}`;
+    const id = newSectionId(kind);
     const look = window.SiteSections.look[kind];
-    c.sections[id] = { title: kind === 'grid' ? 'More work' : 'New section', nav: '', inMenu: look.inMenu, background: look.background, titleStyle: look.titleStyle, titleSize: 100 };
+    const title = (NEW_SECTIONS.find(([k]) => k === kind) || [])[3] || '';
+    c.sections[id] = {
+      title, nav: '', anchor: '', inMenu: look.inMenu, background: look.background, bgColor: '', bgImage: '', bgDarken: 50,
+      titleStyle: look.titleStyle, titleSize: 100, width: 'normal', spacing: 'normal', device: 'all',
+    };
     if (kind === 'grid') {
       c.sections[id].categories = [];
       c.workGrids.push({ id, intro: '' });
     } else {
-      c.customSections.push(normalizeSection({ id, text: 'Write something about this here.' }));
+      c.customSections.push(normalizeSection({ id, type: kind, ...clone(SECTION_STARTERS[kind] || {}) }));
     }
-    insertSection(id);
+    if (at == null) {
+      insertSection(id);
+    } else {
+      c.sections.order.splice(at, 0, id);
+      state.openRow = id;
+    }
     rerenderTab();
+    setTimeout(() => showOnPage(id), 200);
+  }
+
+  // A copy of an added section right under it: same content, look and hidden parts
+  function duplicateSection(id) {
+    const c = state.draft;
+    const kind = kindOf(id);
+    const copyId = newSectionId(kind);
+    const set = clone(c.sections[id]);
+    if (set.title) set.title = `${set.title} (copy)`;
+    set.anchor = '';
+    c.sections[copyId] = set;
+    if (kind === 'grid') c.workGrids.push({ ...clone(c.workGrids.find((g) => g.id === id)), id: copyId });
+    else c.customSections.push({ ...clone(c.customSections.find((s) => s.id === id)), id: copyId });
+    Object.keys(c.hidden).forEach((key) => {
+      if (key.startsWith(`${id}.`)) c.hidden[copyId + key.slice(id.length)] = true;
+    });
+    const order = c.sections.order;
+    order.splice(order.indexOf(id) + 1, 0, copyId);
+    state.openRow = copyId;
+    rerenderTab();
+    setTimeout(() => showOnPage(copyId), 200); // once the page behind has it
   }
 
   function removeSection(id) {
@@ -2481,9 +4032,12 @@
   function moveSection(from, to) {
     const order = state.draft.sections.order;
     if (to < 0 || to >= order.length || from === to) return;
-    const [id] = order.splice(from, 1);
-    order.splice(to, 0, id);
-    rerenderTab();
+    const id = order[from];
+    keepInPlace(() => document.getElementById(id), () => {
+      order.splice(from, 1);
+      order.splice(to, 0, id);
+      rerenderTab();
+    });
   }
 
   // Opens a row's section on the page behind (scrolls to it)
@@ -2497,8 +4051,6 @@
 
   const EYE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
   const EYE_OFF = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7a9.6 9.6 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
-
-  let dragId = null;
 
   function outlineRow(id, index) {
     const c = state.draft;
@@ -2519,16 +4071,11 @@
       },
     });
     if (eye) eye.innerHTML = isHidden ? EYE_OFF : EYE;
+    const handle = fixed ? h('span', { class: 'adm-handle' }) : h('span', { class: 'adm-handle', title: 'Drag to move', text: '⠿' });
 
     const row = h('div', { class: `adm-entry adm-outline-row${isOpen ? ' is-open' : ''}${isHidden ? ' is-hidden' : ''}${fixed ? ' is-fixed' : ''}`, 'data-row': id },
       h('div', { class: 'adm-entry-head' },
-        fixed ? h('span', { class: 'adm-handle' }) : h('span', {
-          class: 'adm-handle',
-          title: 'Drag to move',
-          text: '⠿',
-          // Only the handle starts a drag, so text in the editor below can still be selected
-          onpointerdown: () => { row.draggable = true; },
-        }),
+        handle,
         h('button', {
           class: 'adm-entry-title',
           type: 'button',
@@ -2545,53 +4092,39 @@
           eye)),
       isOpen ? h('div', { class: 'adm-row-body' }, editorFor(id)) : null);
 
-    if (!fixed) {
-      row.addEventListener('dragstart', (e) => {
-        dragId = id;
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', id);
-        row.classList.add('is-dragging');
-      });
-      row.addEventListener('dragend', () => {
-        dragId = null;
-        row.draggable = false;
-        screen.querySelectorAll('.adm-outline-row').forEach((r) => r.classList.remove('is-dragging', 'drop-before', 'drop-after'));
-      });
-      row.addEventListener('dragover', (e) => {
-        if (!dragId || dragId === id) return;
-        e.preventDefault();
-        const box = row.getBoundingClientRect();
-        const before = e.clientY < box.top + Math.min(box.height / 2, 28);
-        row.classList.toggle('drop-before', before);
-        row.classList.toggle('drop-after', !before);
-      });
-      row.addEventListener('dragleave', () => row.classList.remove('drop-before', 'drop-after'));
-      row.addEventListener('drop', (e) => {
-        if (!dragId || dragId === id) return;
-        e.preventDefault();
-        const order = c.sections.order;
-        const before = row.classList.contains('drop-before');
-        order.splice(order.indexOf(dragId), 1);
-        order.splice(order.indexOf(id) + (before ? 0 : 1), 0, dragId);
-        dragId = null;
-        rerenderTab();
-      });
-    }
-    return row;
+    if (fixed) return row;
+    return sortable(row, handle, 'sections', id, (from, to, before) => keepInPlace(() => document.getElementById(from), () => {
+      const order = c.sections.order;
+      moveTo(order, order.indexOf(from), order.indexOf(to), before);
+      rerenderTab();
+    }));
   }
 
   function pageTab() {
+    if (state.allProjects) return allProjectsView();
     const c = state.draft;
     const removed = c.sections.removed.filter((id) => window.SiteSections.builtin.includes(id));
     return h('div', { class: 'adm-form adm-outline' },
-      h('p', { class: 'adm-help', text: 'Your page from top to bottom. Click a section to edit it, drag ⠿ (or use the arrows) to move it, and use the eye to show or hide it.' }),
+      h('div', { class: 'adm-section-head' },
+        h('p', { class: 'adm-help', text: 'Your page from top to bottom. Click a section to edit it, drag ⠿ (or use the arrows) to move it, and use the eye to show or hide it.' }),
+        h('button', {
+          class: 'adm-btn',
+          type: 'button',
+          text: `All projects (${c.work.length})`,
+          title: 'Every project in one list, to search, reorder and edit',
+          onclick: () => { state.allProjects = true; rerenderTab(); },
+        })),
       outlineRow('hero'),
       h('div', { class: 'adm-outline-list' }, c.sections.order.map((id, i) => outlineRow(id, i))),
       h('div', { class: 'adm-add' },
         h('span', { class: 'adm-label', text: '+ Add section' }),
-        h('div', { class: 'adm-inline' },
-          h('button', { class: 'adm-btn', type: 'button', text: 'Text', title: 'A title, text, and optionally a picture and a button', onclick: () => addSection('text') }),
-          h('button', { class: 'adm-btn', type: 'button', text: 'Work grid', title: 'Projects from the categories you pick', onclick: () => addSection('grid') }),
+        h('div', { class: 'adm-add-grid' }, NEW_SECTIONS.map(([kind, name, desc]) => h('button', {
+          class: 'adm-add-card',
+          type: 'button',
+          onclick: () => addSection(kind),
+        }, h('strong', { text: name }), h('span', { text: desc })))),
+        removed.length ? h('div', { class: 'adm-inline' },
+          h('span', { class: 'adm-hint', text: 'Put back:' }),
           removed.map((id) => h('button', {
             class: 'adm-btn',
             type: 'button',
@@ -2602,7 +4135,7 @@
               insertSection(id);
               rerenderTab();
             },
-          })))),
+          }))) : null),
       outlineRow('footer'));
   }
 
@@ -2671,6 +4204,9 @@
       h('label', { class: 'adm-check' },
         h('input', { type: 'checkbox', checked: Boolean(item.featured), onchange: (e) => { item.featured = e.target.checked; rerenderTab(); } }),
         h('span', { text: 'Featured: shown in the Highlights slider at the top of Work (and still in the grid)' })),
+      h('label', { class: 'adm-check' },
+        h('input', { type: 'checkbox', checked: Boolean(item.draft), onchange: (e) => { item.draft = e.target.checked; rerenderTab(); } }),
+        h('span', { text: 'Draft: only shown while this panel is open, not on the live site' })),
       h('div', { class: 'adm-row3' },
         field('Client', text(item, 'client', { placeholder: 'e.g. StartupAwards' })),
         field('Year', text(item, 'year', { placeholder: 'e.g. 2025' })),
@@ -2679,7 +4215,7 @@
       field('Full description (shown in the pop-up)', area(item, 'desc', 5)),
       field('Tools', list(item, 'tools', { placeholder: 'Premiere Pro, After Effects' }), 'Separate with commas.'),
       videosField(item),
-      picturesField(item),
+      picturesField(item.images, item.title, { empty: 'Shown in the pop-up after the videos, with arrows and thumbnails. You can pick several files at once.' }),
       h('div', { class: 'adm-field' },
         h('span', { class: 'adm-label', text: 'Cover image (shown on the card)' }),
         h('div', { class: 'adm-inline' },
@@ -2699,15 +4235,14 @@
     return form;
   }
 
-  // A project's pictures: a strip of small thumbnails. Clicking one shows its few controls underneath,
-  // so a big gallery stays a single tidy row of images.
+  // Pictures (a project's, or a Gallery section's): a strip of small thumbnails. Clicking one shows its few
+  // controls underneath, so a big gallery stays a single tidy row of images. Drag one to move it.
   let openPicture = null; // the picture whose controls are shown
 
-  function picturesField(item) {
-    const pics = item.images;
+  function picturesField(pics, name, { captions, empty, folder = 'work' }) {
     const selected = pics.includes(openPicture) ? openPicture : null;
     const index = pics.indexOf(selected);
-    const moveTo = (to) => {
+    const shift = (to) => {
       pics.splice(index, 1);
       pics.splice(to, 0, selected);
       rerenderTab();
@@ -2719,8 +4254,8 @@
         multiple: true,
         onchange: (e) => {
           [...e.target.files].forEach((file, n) => {
-            const path = stageFile(file, `assets/work/${slug(item.title)}-pic-${Date.now().toString(36)}${n}${extension(file)}`);
-            if (path) pics.push({ src: path, alt: '' });
+            const path = stageFile(file, `assets/${folder}/${slug(name)}-pic-${Date.now().toString(36)}${n}${extension(file)}`);
+            if (path) pics.push({ src: path, alt: '', ...(captions ? { caption: '' } : {}) });
           });
           e.target.value = '';
           rerenderTab();
@@ -2728,21 +4263,26 @@
       }));
     return h('div', { class: 'adm-field' },
       h('div', { class: 'adm-section-head' }, h('span', { class: 'adm-label', text: pics.length ? `Pictures (${pics.length})` : 'Pictures' }), add),
-      pics.length ? h('div', { class: 'adm-pictures' }, pics.map((pic) => h('button', {
-        class: `adm-picture${pic === selected ? ' is-selected' : ''}`,
-        type: 'button',
-        title: pic.alt || 'Click for options',
-        'aria-pressed': String(pic === selected),
-        onclick: () => { openPicture = pic === selected ? null : pic; rerenderTab(); },
-      }, h('img', { src: window.SITE_ASSET_OVERRIDES[pic.src] || pic.src, alt: pic.alt || '' }),
-      state.pending.has(pic.src) ? h('span', { class: 'adm-picture-new', title: 'Uploads on save' }) : null)))
-        : h('span', { class: 'adm-hint', text: 'Shown in the pop-up after the videos, with arrows and thumbnails. You can pick several files at once.' }),
+      pics.length ? h('div', { class: 'adm-pictures' }, pics.map((pic, n) => {
+        const thumb = h('button', {
+          class: `adm-picture${pic === selected ? ' is-selected' : ''}`,
+          type: 'button',
+          title: pic.alt || pic.caption || 'Click for options, drag to move',
+          'aria-pressed': String(pic === selected),
+          onclick: () => { openPicture = pic === selected ? null : pic; rerenderTab(); },
+        }, h('img', { src: window.SITE_ASSET_OVERRIDES[pic.src] || pic.src, alt: pic.alt || '', draggable: false }),
+        state.pending.has(pic.src) ? h('span', { class: 'adm-picture-new', title: 'Uploads on save' }) : null);
+        return sortable(thumb, thumb, `pictures-${name}`, n, (from, to, before) => { moveTo(pics, from, to, before); rerenderTab(); }, true);
+      }))
+        : h('span', { class: 'adm-hint', text: empty }),
       selected ? h('div', { class: 'adm-picture-tools' },
-        text(selected, 'alt', { placeholder: 'Description (for screen readers)' }),
+        h('div', { class: 'adm-form adm-grow' },
+          text(selected, 'alt', { placeholder: 'Description (for screen readers)' }),
+          captions ? text(selected, 'caption', { placeholder: 'Caption (optional, shown under it)' }) : null),
         h('div', { class: 'adm-row-controls' },
-          iconBtn('\u2190', 'Move left', () => moveTo(index - 1), index === 0),
-          iconBtn('\u2192', 'Move right', () => moveTo(index + 1), index === pics.length - 1),
-          iconBtn('\u2715', 'Remove picture', () => { pics.splice(index, 1); openPicture = null; rerenderTab(); }))) : null);
+          iconBtn('←', 'Move left', () => shift(index - 1), index === 0),
+          iconBtn('→', 'Move right', () => shift(index + 1), index === pics.length - 1),
+          iconBtn('✕', 'Remove picture', () => { pics.splice(index, 1); openPicture = null; rerenderTab(); }))) : null);
   }
 
   // A project's videos: the pop-up plays the first and shows the rest as thumbnails to switch to
@@ -2764,7 +4304,9 @@
         videoForm(item, clip, i))));
   }
 
-  function videoForm(item, clip, i) {
+  // Where a video comes from: a YouTube link, an uploaded file or a direct link (a project's video, or a
+  // Video section). Returns the source picker and the field for the chosen source.
+  function videoSource(clip, name, folder = 'work') {
     const mode = clip.youtube ? 'youtube' : clip.video ? (/^https?:\/\//i.test(clip.video) ? 'url' : 'file') : 'youtube';
     const videoMode = clip._mode || mode;
     const modeSelect = h('select', {
@@ -2798,7 +4340,7 @@
         h('span', { class: 'adm-label', text: 'Video file (MP4 recommended)' }),
         currentFile(clip.video),
         filePicker('video/*', (file) => {
-          const path = stageFile(file, `assets/work/${slug(clip.title || item.title)}-${Date.now().toString(36)}${extension(file)}`);
+          const path = stageFile(file, `assets/${folder}/${slug(name)}-${Date.now().toString(36)}${extension(file)}`);
           if (path) { clip.video = path; rerenderTab(); }
         }),
         h('span', { class: 'adm-hint', text: `Up to ${MAX_BYTES / MB} MB. Bigger videos belong on YouTube, or on your own storage/CDN using "Direct video URL".` }));
@@ -2810,12 +4352,16 @@
         oninput: (e) => { clip.video = e.target.value.trim(); changed(); },
       }), 'A direct link to the video file itself (ending in .mp4 or similar), hosted on your own storage or CDN. Nothing is uploaded through this panel for this option; make sure the file is already live at that URL.');
     }
+    return { modeSelect: field('Source', modeSelect), source };
+  }
 
+  function videoForm(item, clip, i) {
+    const { modeSelect, source } = videoSource(clip, clip.title || item.title);
     return h('div', { class: 'adm-form' },
       check(clip, 'hideInMonitor', 'Hide from the top-section monitor and timeline'),
       h('div', { class: 'adm-row2' },
         field('Video title', text(clip, 'title', { placeholder: i === 0 ? 'Optional, e.g. a name' : `Video ${i + 1}` })),
-        field('Source', modeSelect)),
+        modeSelect),
       source,
       h('div', { class: 'adm-field' },
         h('span', { class: 'adm-label', text: 'Thumbnail (optional)' }),
@@ -2832,7 +4378,7 @@
   // ---------- Top section (Page tab) ----------
   function check(obj, key, label) {
     return h('label', { class: 'adm-check' },
-      h('input', { type: 'checkbox', checked: Boolean(obj[key]), onchange: (e) => { obj[key] = e.target.checked; changed(); } }),
+      h('input', { type: 'checkbox', checked: Boolean(obj[key]), onchange: (e) => { obj[key] = e.target.checked; changed(); recordHistory(); } }),
       h('span', { text: label }));
   }
 
@@ -2853,6 +4399,7 @@
         const raw = e.target.value;
         obj[key] = typeof options[0][0] === 'number' ? Number(raw) : raw;
         changed();
+        recordHistory();
       },
     }, options.map(([value, text]) => h('option', { value, text, selected: obj[key] === value }))), hint);
   }
@@ -3145,6 +4692,13 @@
         item.images = item.images.filter((img) => img.src);
         item.videos.forEach((clip) => { delete clip._mode; });
         item.links = item.links.filter((l) => l.label && l.url);
+        if (!item.draft) delete item.draft;
+      });
+      content.customSections.forEach((sec) => {
+        delete sec._mode;
+        if (sec.buttons) sec.buttons = sec.buttons.filter((b) => b.label && b.url);
+        if (sec.images) sec.images = sec.images.filter((img) => img.src);
+        if (sec.items) sec.items = sec.items.filter((item) => Object.entries(item).some(([key, value]) => key !== 'i18n' && typeof value === 'string' && value));
       });
       content.customLinks = content.customLinks.filter((l) => l.url);
 
@@ -3199,6 +4753,7 @@
   // The site's language changed (header switch or the picker above): show the draft in it and rebuild the forms
   document.addEventListener('site:languagechange', () => {
     if (!state.draft || !root || root.hidden) return;
+    stopEditing();
     renderPage(state.draft);
     if (state.token && screen.querySelector('.adm-editor')) showEditor();
   });
