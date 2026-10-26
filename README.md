@@ -58,8 +58,9 @@ in over the page. Press it again or click × to close it.
 
 **Setup wizard:** on a fresh copy (the name is still empty or "Your Name"), unlocking the panel
 opens seven short steps: name and intro, a look, the top-section style, the kinds of work (which
-become the categories), contact details and languages. The page behind shows the result as you
-go; nothing is published until Save & publish. Each step can be skipped, and the Site tab has
+become the categories), contact details and languages. The look step has the Theme tab's colours
+and fonts (schemes, colour swatches, Dark / Light, font samples, your own fonts). The page behind
+shows the result as you go; nothing is published until Save & publish. Each step can be skipped, and the Site tab has
 **Run setup again**.
 
 The token is encrypted with your password (PBKDF2-SHA256 with 600,000 rounds, then
@@ -127,7 +128,9 @@ again with a new GitHub token; nothing on the site is lost either way.
   - **Call to action:** one big line, a line under it, and buttons.
   - **Work grid:** each Work section shows the projects from the categories ticked under
     "Projects shown here" (nothing ticked: all of them), with its own intro, highlights slider
-    and filter buttons.
+    and filter buttons. While editing, every category it may show has a filter button (faded
+    until it has a project): pick one and **+ Add project** adds a project of that kind. Each
+    project card's bar has a category picker.
 
   The entries in Testimonials, Logos, Numbers and FAQ fold to one line each; drag ⠿ to move
   them, ⧉ duplicates one. **Duplicate section** copies an added section right under it. Built-in
@@ -164,7 +167,13 @@ again with a new GitHub token; nothing on the site is lost either way.
   written in itself to pick from (a Google Fonts list, plus your own under **+ Your own font**:
   upload font files (.woff2, .woff, .ttf, .otf; saved in `assets/fonts/`): files with
   the same name form one family, each with its weight and style (stored as `theme.customFonts`)).
+  A tick turns off the full stop in the accent colour after section titles (`theme.titleDot`).
   **Corners** and **Mouse effect** are folded to one line saying how they're set; click to change.
+  Their sliders restyle the page while dragged, like the colours.
+- **Pictures shrink on upload:** a photo bigger than 2400 px (or heavier than 500 KB) is scaled
+  down and saved again in its own format (JPEG, WebP or PNG) before it's uploaded, which also
+  drops the camera's hidden details (place, device). GIFs, SVGs and animated pictures stay as
+  they are, and so does a picture that wouldn't get clearly smaller.
 - **Removing things:** the eye hides a whole section, and the ticks in a section's editor hide its
   parts. Nothing is deleted; show it again to bring it back. Menu links pointing to a hidden
   section are hidden too. Stored as `hidden` in `content/site.js`. While the panel is open,
@@ -177,7 +186,8 @@ again with a new GitHub token; nothing on the site is lost either way.
   cards use YouTube's own thumbnail unless you upload one.
 - **Edit on the page:** while the panel is open, the page is an editor too:
   - **Text:** click any text to type in it: your name, section titles, intros, project titles
-    and teasers, the bio and skills, timeline and toolkit entries, and the text of the added
+    and teasers, the bio and skills, timeline and toolkit entries, the contact form's title
+    (saved as that language's interface text, `languages.ui`), and the text of the added
     sections. Enter finishes, Esc puts back what was there, clicking elsewhere finishes. In a
     bio paragraph Enter starts the next paragraph. Text with formatting (Text sections, FAQ
     answers, quotes) shows as typed, with its `**`, while you edit it; Enter is a new line, an
@@ -310,6 +320,20 @@ screen, and never moves for visitors who reduce motion.
   videos: **+ Add pictures** takes several files at once, and clicking one shows its description,
   ← → to reorder and ✕ to remove
 - `links`: up to two pop-up buttons, each `{ "label": "...", "url": "..." }`
+- `slug` (optional): the end of the project's link, `?project=<slug>`. Without it the link is made
+  from the title (lowercase, dashes; a second project with the same name gets `-2`). Set one in the
+  admin panel ("Link to this project", with **Copy link**) before sharing a link, so it keeps
+  working when the title changes.
+
+**Project links:** opening a project puts its link in the address bar, so it can be shared, and the
+back button closes it. `projectView` (any Work section in the admin panel, "Opening a project")
+chooses how: `"popup"` (the default) over the page, or `"page"`: the project takes the place of the
+sections, between the menu and the footer, with a Back button. An old link to a project that no
+longer exists shows the page with a short note.
+
+**404 page:** `404.html` is what GitHub Pages shows for an address that doesn't exist. It finds the
+home page (at the domain's root, or in the repository's folder) and goes there, where a note says
+the page didn't exist.
 
 Project files live in `assets/work/`.
 

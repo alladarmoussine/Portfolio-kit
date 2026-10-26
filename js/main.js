@@ -141,11 +141,16 @@ function latestSave() {
 function showSaveNote(age) {
   const minutes = Math.round(age / 60000);
   const when = minutes < 1 ? 'just now' : `${minutes} min ago`;
+  showNote(minutes < 10
+    ? `Showing your latest save (${when}). The live site is still updating; visitors see it within a few minutes.`
+    : `Showing your latest save (${when}), but the live site still has an older version. Check that GitHub Pages is publishing: your repository \u2192 Actions, or Settings \u2192 Pages.`);
+}
+
+// A small note at the bottom of the screen, with a button to close it
+function showNote(text) {
   const note = el('div', 'save-note');
   note.setAttribute('role', 'status');
-  note.appendChild(el('span', null, minutes < 10
-    ? `Showing your latest save (${when}). The live site is still updating; visitors see it within a few minutes.`
-    : `Showing your latest save (${when}), but the live site still has an older version. Check that GitHub Pages is publishing: your repository \u2192 Actions, or Settings \u2192 Pages.`));
+  note.appendChild(el('span', null, text));
   const close = el('button', null, '\u00D7');
   close.type = 'button';
   close.setAttribute('aria-label', 'Close');
@@ -476,13 +481,13 @@ function opensModal(container, selector) {
     const target = e.target.closest(selector);
     if (!target) return;
     target.querySelectorAll('.thumb-preview').forEach((v) => v.pause());
-    openModal(target);
+    openProject(Number(target.dataset.index), { card: target });
   });
   container.addEventListener('keydown', (e) => {
     const target = e.target.closest(selector);
     if (target && (e.key === 'Enter' || e.key === ' ')) {
       e.preventDefault();
-      openModal(target);
+      openProject(Number(target.dataset.index), { card: target });
     }
   });
 }
@@ -563,15 +568,19 @@ function applyFilter(g) {
   });
 }
 
-// entries: [{ item, index }] for this grid (index = place in content.work, used by the pop-up and editing)
-function renderGrid(g, entries, settings) {
-  // Filter buttons: only worth showing with two or more categories in use
+// entries: [{ item, index }] for this grid (index = place in content.work, used by the pop-up and editing);
+// shown: the categories this grid may show
+function renderGrid(g, entries, settings, shown = categories) {
+  // Filter buttons: only worth showing with two or more categories in use. While editing, every category
+  // the grid may show gets one (empty ones faded), so a project can be added straight into it.
   const used = categories.filter((cat) => entries.some(({ item }) => categoryOf(item.type).id === cat.id));
-  if (g.filter !== 'all' && !used.some((cat) => cat.id === g.filter)) g.filter = 'all';
+  const buttons = isEditing() ? shown : used;
+  if (g.filter !== 'all' && !buttons.some((cat) => cat.id === g.filter)) g.filter = 'all';
   g.bar.querySelectorAll('.filter-btn').forEach((btn) => btn.remove());
-  g.bar.hidden = used.length < 2;
-  [['all', t('work.all')], ...used.map((cat) => [cat.id, typeLabel(cat.id)])].forEach(([id, label]) => {
-    const btn = el('button', `filter-btn${id === g.filter ? ' is-active' : ''}`, label);
+  g.bar.hidden = buttons.length < 2;
+  [['all', t('work.all')], ...buttons.map((cat) => [cat.id, typeLabel(cat.id)])].forEach(([id, label]) => {
+    const empty = id !== 'all' && !used.some((cat) => cat.id === id);
+    const btn = el('button', `filter-btn${id === g.filter ? ' is-active' : ''}${empty ? ' is-empty' : ''}`, label);
     btn.type = 'button';
     btn.dataset.filter = id;
     btn.setAttribute('role', 'tab');
@@ -675,7 +684,8 @@ function renderGrids(content) {
   document.querySelectorAll('main > section.work').forEach((section) => {
     if (!grids.has(section.id)) grids.set(section.id, createGrid(section));
     const allowed = ((sections[section.id] || {}).categories || []).filter((id) => categories.some((c) => c.id === id));
-    renderGrid(grids.get(section.id), allowed.length ? entries.filter(({ item }) => allowed.includes(categoryOf(item.type).id)) : entries, content.highlights);
+    renderGrid(grids.get(section.id), allowed.length ? entries.filter(({ item }) => allowed.includes(categoryOf(item.type).id)) : entries, content.highlights,
+      allowed.length ? categories.filter((cat) => allowed.includes(cat.id)) : categories);
   });
 }
 
@@ -1261,7 +1271,7 @@ function themeCss(theme, forFile) {
   return `:root{--bg:${c.bg};--bg-alt:${c.bgAlt};--surface:${c.surface};--border:${c.border};--text:${c.text};--text-dim:${c.textDim};`
     + `--accent:${c.accent};--accent-dark:${c.accentDark};--accent-orange:${c.accent2};--on-accent:${c.onAccent};`
     + `--hero-bg:${c.heroBg};--hero-text:${hero.text};--hero-text-dim:${hero.dim};--hero-border:${hero.border};`
-    + `--radius:${radius}px;--font-body:${fontStack(set.font || 'Geologica')};--font-heading:${fontStack(set.headingFont || set.font || 'Geologica')};`
+    + `--radius:${radius}px;--title-dot:${set.titleDot === false ? 'none' : '"."'};--font-body:${fontStack(set.font || 'Geologica')};--font-heading:${fontStack(set.headingFont || set.font || 'Geologica')};`
     + `color-scheme:${dark ? 'dark' : 'light'}}${customFontCss(set, forFile)}`;
 }
 
@@ -1286,10 +1296,11 @@ function applyTheme(theme) {
 }
 
 // Used by the admin panel (Theme tab, and writing these into index.html on save)
-// apply() recolours the page at once without rebuilding it (the panel uses it while a colour is dragged)
+// apply() restyles the page at once without rebuilding it: colours, corners, fonts and the mouse effect
+// (the panel uses it while a colour or a Theme slider is dragged)
 window.SiteTheme = {
   presets: THEME_PRESETS, fonts: THEME_FONTS, colors: themeColors, css: themeCss, fontsHref: themeFontsHref, favicon: faviconHref,
-  apply: (theme) => { applyTheme(theme); matchHeroFade(); },
+  apply: (theme) => { applyTheme(theme); applyCursor(theme && theme.cursor); matchHeroFade(); },
 };
 
 // ---------- Mouse effect (admin: Theme tab) ----------
@@ -1633,6 +1644,7 @@ function pageFromUrl(content) {
 // Shows another page (or the home page, ''): the address changes, the page is drawn again
 function showPage(pageId, { push = true, hash = '' } = {}) {
   const page = pagesOf(currentContent).find((pg) => pg.id === pageId) || null;
+  if (!modal.hidden) hideModal();
   currentPageId = page ? page.id : '';
   if (push) history.pushState(null, '', pageHref(page) + (hash ? `#${hash}` : ''));
   renderSite(currentContent);
@@ -1653,8 +1665,10 @@ document.addEventListener('click', (e) => {
 });
 window.addEventListener('popstate', () => {
   const pageId = pageFromUrl(currentContent);
-  if (pageId === currentPageId) return;
-  showPage(pageId, { push: false, hash: hashName(window.location.hash) });
+  if (pageId !== currentPageId) showPage(pageId, { push: false, hash: hashName(window.location.hash) });
+  const project = projectFromUrl();
+  if (project >= 0 && project !== openProjectIndex) openProject(project, { push: false });
+  else if (project < 0 && openProjectIndex !== null) hideModal();
 });
 
 window.SitePages = {
@@ -2160,6 +2174,8 @@ function renderSite(fullContent) {
   const page = pagesOf(content).find((pg) => pg.id === currentPageId);
   if (page && (page.title || '').trim()) document.title = `${page.title.trim()} · ${document.title}`;
   workItems = content.work || [];
+  projectSlugs = slugsFor(workItems);
+  projectView = fullContent.projectView === 'page' ? 'page' : 'popup';
   renderCustomSections(content);
   renderExtraGrids(content.workGrids || []);
   applySections(content);
@@ -2377,11 +2393,75 @@ function buildMediaPicker(item) {
   });
 }
 
-function openModal(card) {
-  const item = workItems[Number(card.dataset.index)];
-  if (!item) return;
-  const thumbSource = card.querySelector('.card-thumb');
+// ---------- Project addresses ----------
+// Every project has an address, ?project=<name>: its link name (item.slug) or its title, in lowercase with
+// dashes. Opening a project puts it in the address bar, so it can be shared, and the back button closes it.
+// content.projectView: "popup" (the default) opens it over the page; "page" shows it as a page of its own,
+// with a button back.
+let projectSlugs = [];
+let projectView = 'popup';
+let openProjectIndex = null; // the project shown, by its place in content.work
+let projectPushed = false; // its address was added to the history (so closing goes back)
+let beforeProject = { scroll: 0, title: '' };
 
+const slugOf = (text) => String(text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+// Two projects with the same name: the second gets -2, and so on
+function slugsFor(items) {
+  const seen = new Map();
+  return items.map((item) => {
+    const base = slugOf(item.slug) || slugOf(item.title) || 'project';
+    const n = (seen.get(base) || 0) + 1;
+    seen.set(base, n);
+    return n > 1 ? `${base}-${n}` : base;
+  });
+}
+
+// Used by the admin panel (a project's link)
+window.SiteProjects = {
+  slugs: slugsFor,
+  link: (slug) => `${window.location.origin}${window.location.pathname}?project=${encodeURIComponent(slug)}`,
+};
+
+// The address with ?project=… set (a slug) or taken out (''), keeping the rest
+function projectUrl(slug) {
+  const params = new URLSearchParams(window.location.search);
+  if (slug) params.set('project', slug);
+  else params.delete('project');
+  const query = params.toString();
+  return `${window.location.pathname}${query ? `?${query}` : ''}${slug ? '' : window.location.hash}`;
+}
+
+function projectFromUrl() {
+  const slug = new URLSearchParams(window.location.search).get('project');
+  const index = slug ? projectSlugs.indexOf(slug) : -1;
+  return index >= 0 && workItems[index] && (!workItems[index].draft || showDrafts()) ? index : -1;
+}
+
+function openProject(index, { push = true, card = null } = {}) {
+  const item = workItems[index];
+  if (!item) return;
+  if (openProjectIndex === null) beforeProject = { scroll: window.scrollY, title: document.title };
+  if (push) {
+    history.pushState(null, '', projectUrl(projectSlugs[index]));
+    projectPushed = true;
+  }
+  openProjectIndex = index;
+  fillProject(item, card ? card.querySelector('.card-thumb') : buildThumb(item));
+  document.title = `${item.title} · ${beforeProject.title}`;
+  lastFocusedCard = card || lastFocusedCard;
+  const asPage = projectView === 'page';
+  document.documentElement.classList.toggle('is-project-page', asPage);
+  modal.querySelector('.modal').setAttribute('aria-modal', String(!asPage));
+  modalClose.textContent = asPage ? `← ${t('work.back')}` : '×';
+  modal.hidden = false;
+  if (asPage) window.scrollTo({ top: 0, behavior: 'instant' });
+  else document.body.style.overflow = 'hidden';
+  modalClose.focus({ preventScroll: true });
+}
+
+function fillProject(item, thumbSource) {
   modalThumb.className = 'modal-thumb';
   modalThumb.style.setProperty('--tile', thumbSource.style.getPropertyValue('--tile'));
 
@@ -2414,16 +2494,12 @@ function openModal(card) {
     link.rel = 'noopener';
     modalLinks.appendChild(link);
   });
-
-  lastFocusedCard = card;
-  modal.hidden = false;
-  document.body.style.overflow = 'hidden';
-  modalClose.focus();
 }
 
 // A Gallery section's pictures in the same pop-up, with its title and each picture's caption
 function openPictures(images, index, title, opener) {
   modalItem = { title, images, videos: [], isGallery: true };
+  modalClose.textContent = '\u00D7';
   modal.classList.add('is-gallery');
   modalThumb.className = 'modal-thumb';
   modalTag.hidden = true;
@@ -2440,22 +2516,51 @@ function openPictures(images, index, title, opener) {
   modalClose.focus();
 }
 
+// Closing a project also takes it out of the address: back through the history when opening it added
+// it there, so the back button doesn't open it again
 function closeModal() {
+  if (openProjectIndex !== null) {
+    if (projectPushed) {
+      history.back(); // popstate hides it
+      return;
+    }
+    history.replaceState(null, '', projectUrl(''));
+  }
+  hideModal();
+}
+
+function hideModal() {
+  const wasPage = document.documentElement.classList.contains('is-project-page');
   modal.hidden = true;
   modalThumb.innerHTML = ''; // stops any playing video
   document.body.style.overflow = '';
-  if (lastFocusedCard && lastFocusedCard.isConnected) lastFocusedCard.focus();
+  document.documentElement.classList.remove('is-project-page');
+  if (openProjectIndex !== null) {
+    document.title = beforeProject.title;
+    if (wasPage) window.scrollTo({ top: beforeProject.scroll, behavior: 'instant' });
+  }
+  openProjectIndex = null;
+  projectPushed = false;
+  if (lastFocusedCard && lastFocusedCard.isConnected) lastFocusedCard.focus({ preventScroll: wasPage });
 }
 
 modalClose.addEventListener('click', closeModal);
 
+// A menu link (#work…) while a project is shown as a page: back to the sections first, then on to it
+document.addEventListener('click', (e) => {
+  const link = e.target.closest && e.target.closest('a[href^="#"]');
+  if (!link || !document.documentElement.classList.contains('is-project-page')) return;
+  history.replaceState(null, '', projectUrl(''));
+  hideModal();
+}, true);
+
 modal.addEventListener('click', (e) => {
-  if (e.target === modal) closeModal();
+  if (e.target === modal && !document.documentElement.classList.contains('is-project-page')) closeModal();
 });
 
 document.addEventListener('keydown', (e) => {
   if (modal.hidden) return;
-  if (e.key === 'Escape') closeModal();
+  if (e.key === 'Escape' && !document.documentElement.classList.contains('is-project-page')) closeModal();
   // Arrow keys move through the pictures and videos (not while typing or using a video's own controls)
   else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !(e.target.closest && e.target.closest('video, input, textarea'))) {
     if (projectMedia(modalItem).length > 1) showMedia(mediaIndex + (e.key === 'ArrowLeft' ? -1 : 1));
@@ -2465,7 +2570,20 @@ document.addEventListener('keydown', (e) => {
 applyLanguage();
 renderSite(window.SITE_CONTENT || {});
 if (window.location.hash) scrollToAnchor(hashName(window.location.hash), false);
+if (projectFromUrl() >= 0) openProject(projectFromUrl(), { push: false });
+else if (new URLSearchParams(window.location.search).has('project')) {
+  // An old link (the project was renamed or removed)
+  history.replaceState(null, '', projectUrl(''));
+  showNote(t('work.missing'));
+}
 if (pendingSave) showSaveNote(pendingSave.age);
+// Sent here by 404.html from an address that doesn't exist: say so, and tidy the address
+if (new URLSearchParams(window.location.search).has('missing')) {
+  const params = new URLSearchParams(window.location.search);
+  params.delete('missing');
+  history.replaceState(null, '', `${window.location.pathname}${params.toString() ? `?${params}` : ''}${window.location.hash}`);
+  showNote(t('site.missing'));
+}
 loadAnalytics((window.SITE_CONTENT || {}).analytics);
 
 // Cloudflare Web Analytics: only loads once a token is set (admin panel, Site tab),

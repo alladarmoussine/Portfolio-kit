@@ -634,9 +634,9 @@ main > section.is-first { border-top: 0; }
   letter-spacing: -0.07em;
 }
 
-/* Orange full stop at the end of big section headings */
+/* Accent full stop at the end of big section headings (admin: Theme tab → Fonts) */
 .section-title::after {
-  content: ".";
+  content: var(--title-dot, ".");
   color: var(--accent-orange);
   /* Undo the heading's tight letter spacing so the dot doesn't overlap the last letter */
   margin-left: 0.08em;
@@ -1983,6 +1983,48 @@ main > section.is-off-page { display: none !important; }
 }
 
 .modal-links .btn { padding: 11px 22px; font-size: 0.9rem; }
+
+/* A project as a page of its own (admin: Work section → Opening a project): the pop-up's content takes the
+   place of the sections, between the menu and the footer, with a Back button */
+html.is-project-page main { display: none; }
+
+html.is-project-page .modal-overlay {
+  position: static;
+  display: block;
+  padding: 40px 24px 80px;
+  background: none;
+  backdrop-filter: none;
+  animation: none;
+}
+
+html.is-project-page .modal {
+  max-width: 1000px;
+  max-height: none;
+  margin: 0 auto;
+  overflow: visible;
+  background: none;
+  border: 0;
+  animation: none;
+}
+
+html.is-project-page .modal-close {
+  position: static;
+  width: auto;
+  height: auto;
+  margin-bottom: 20px;
+  padding: 8px 18px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+html.is-project-page .modal-thumb { border-radius: var(--radius); overflow: hidden; }
+html.is-project-page .modal-videos { padding-left: 0; padding-right: 0; }
+html.is-project-page .modal-body { padding: 28px 0 0; }
+html.is-project-page .modal-body h3 { font-size: clamp(1.8rem, 4vw, 2.8rem); }
+html.is-project-page .modal-body p { max-width: 70ch; }
 
 /* Footer */
 .site-footer {

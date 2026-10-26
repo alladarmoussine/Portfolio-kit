@@ -27,6 +27,7 @@ window.SITE_CONTENT = {
     "font": "Geologica",
     "headingFont": "",
     "radius": 14,
+    "titleDot": true,
     "colors": {},
     "saved": [],
     "customFonts": [],
@@ -104,6 +105,7 @@ window.SITE_CONTENT = {
     "service": "",
     "key": ""
   },
+  "projectView": "popup",
   "customLinks": [],
   "footerLinks": [
     "instagram",

@@ -214,6 +214,7 @@
     c.theme.colors = { ...(c.theme.colors || {}) };
     c.theme.cursor = { ...(window.CURSOR_DEFAULTS || {}), ...(c.theme.cursor || {}) };
     c.theme.saved = (Array.isArray(c.theme.saved) ? c.theme.saved : []).map((scheme) => ({ name: '', preset: 'midnight', ...scheme, colors: { ...((scheme && scheme.colors) || {}) } }));
+    c.theme.titleDot = c.theme.titleDot !== false;
     c.theme.customFonts = (c.theme.customFonts || []).map((f) => ({ name: '', file: '', weight: 'auto', style: 'normal', ...f }));
     c.customSections = (c.customSections || []).map(normalizeSection);
     c.workGrids = (c.workGrids || []).map((grid) => ({ intro: '', ...grid }));
@@ -260,6 +261,7 @@
     c.analytics = c.analytics || { cloudflareToken: '' };
     c.contactForm = { service: '', key: '', ...(c.contactForm || {}) };
     c.highlights = { autoplay: true, seconds: 6, ...(c.highlights || {}) };
+    c.projectView = c.projectView === 'page' ? 'page' : 'popup';
     c.hidden = c.hidden || {};
     // Content saved before these existed: start from what the page currently shows
     document.querySelectorAll('[data-text]').forEach((node) => {
@@ -473,6 +475,8 @@
     to.push(history.current);
     history.current = from.pop();
     state.draft = JSON.parse(history.current);
+    // The snapshot leaves out empty interface text; the forms expect the object
+    state.draft.languages.ui = state.draft.languages.ui || {};
     openPicture = null;
     renderPage(state.draft);
     if (screen && screen.querySelector('.adm-editor')) {
@@ -709,7 +713,6 @@
 
   function decoratePage() {
     document.documentElement.classList.add('adm-editing');
-    document.documentElement.classList.toggle('adm-dock-left', dockedLeft());
     document.querySelectorAll(CHROME).forEach((node) => node.remove());
     // ✎ for things without text to type: their form in the panel
     document.querySelectorAll('[data-edit-item]').forEach((item) => {
@@ -745,7 +748,7 @@
   function undecoratePage() {
     stopEditing();
     previewing = false;
-    document.documentElement.classList.remove('adm-editing', 'adm-previewing', 'adm-dock-left');
+    document.documentElement.classList.remove('adm-editing', 'adm-previewing');
     document.querySelectorAll(`${CHROME}, .adm-preview-pill`).forEach((node) => node.remove());
     document.querySelectorAll('[data-adm-row]').forEach((node) => {
       node.classList.remove('adm-selected');
@@ -1156,6 +1159,7 @@
       barBtn(vertical ? '↑' : '←', `Move this ${what} ${vertical ? 'up' : 'left'}`, () => swapWith(nodes[n - 1]), { disabled: n === 0 }),
       barBtn(vertical ? '↓' : '→', `Move this ${what} ${vertical ? 'down' : 'right'}`, () => swapWith(nodes[n + 1]), { disabled: n === nodes.length - 1 }),
       what === 'project' ? barBtn('Draft', item.draft ? 'Draft: only you see it. Click to put it on the live site' : 'Make it a draft (off the live site)', () => changeList(path, () => { item.draft = !item.draft; }), { pressed: Boolean(item.draft) }) : null,
+      what === 'project' && state.draft.categories.length > 1 ? categoryPicker(path, item) : null,
       barBtn('⧉', `Duplicate this ${what}`, () => changeList(path, (a, main) => {
         const copy = clone(a[index] === undefined ? '' : a[index]);
         if (main && what === 'project' && copy.title) copy.title = `${copy.title} (copy)`;
@@ -1164,6 +1168,19 @@
       barBtn('✕', `Delete this ${what}`, () => {
         if (confirm(`Delete this ${what}?`)) changeList(path, (a) => { a.splice(index, 1); });
       }, { danger: true }));
+  }
+
+  // A project's category, picked on its card (clicks and keys stay here instead of opening the project)
+  function categoryPicker(path, item) {
+    const keep = (e) => e.stopPropagation();
+    return h('select', {
+      class: 'adm-bar-select',
+      title: 'Category',
+      'aria-label': 'Category',
+      onclick: keep,
+      onkeydown: keep,
+      onchange: (e) => changeList(path, () => { item.type = e.target.value; }),
+    }, state.draft.categories.map((cat) => h('option', { value: cat.id, text: cat.label || cat.id, selected: item.type === cat.id })));
   }
 
   // Changes a list from the page. Lists of plain text (skills, bio paragraphs) are translated item by item,
@@ -1204,9 +1221,12 @@
     }
     let entry;
     if (what === 'project') {
+      // In the category picked in the grid's filter buttons, else the grid's first
       const sectionId = sectionOf(list);
       const allowed = ((state.draft.sections[sectionId] || {}).categories || [])[0];
-      entry = normalizeWork({ type: allowed || (state.draft.categories[0] || {}).id, title: 'New project', teaser: 'One line about it.' });
+      const filter = list.closest('section') && list.closest('section').querySelector('.filter-btn.is-active');
+      const picked = filter && filter.dataset.filter !== 'all' ? filter.dataset.filter : '';
+      entry = normalizeWork({ type: picked || allowed || (state.draft.categories[0] || {}).id, title: 'New project', teaser: 'One line about it.' });
     } else {
       entry = NEW_ENTRIES[what] ? NEW_ENTRIES[what]() : {};
     }
@@ -1234,6 +1254,13 @@
   }
 
   function fieldSlot(path) {
+    // "ui:contact.formTitle": interface text, kept as the editing language's own wording (languages.ui)
+    if (path.startsWith('ui:')) {
+      const L = state.draft.languages;
+      const ui = L.ui = L.ui && typeof L.ui === 'object' ? L.ui : {};
+      ui[lang()] = ui[lang()] || {};
+      return { obj: ui[lang()], key: path.slice(3) };
+    }
     const keys = path.split('.');
     if (!translating(keys.filter((k) => !/^\d+$/.test(k)).pop())) return slotIn(state.draft, path);
     let owner = state.draft;
@@ -1512,13 +1539,66 @@
     if (old) URL.revokeObjectURL(old);
     state.pending.set(path, file);
     window.SITE_ASSET_OVERRIDES[path] = URL.createObjectURL(file);
+    // A big photo is swapped for a smaller copy once it's ready (saving waits for it)
+    if (file.type in SHRINK_QUALITY) {
+      const job = shrinkPicture(file).catch(() => null).then((smaller) => {
+        if (shrinking.get(path) !== job) return;
+        shrinking.delete(path);
+        if (!smaller || state.pending.get(path) !== file) return;
+        state.pending.set(path, smaller);
+        window.SITE_ASSET_OVERRIDES[path] = URL.createObjectURL(smaller);
+        preview();
+      });
+      shrinking.set(path, job);
+    }
     return path;
+  }
+
+  // ---------- Pictures shrink on upload ----------
+  // A photo wider or taller than 2400 px, or heavier than 500 KB, is scaled down and saved again in its own
+  // format (so its name stays the same) before it's uploaded. That keeps the site quick and drops the
+  // camera's hidden details (place, device). GIF, SVG and animated pictures stay as they are, and so does
+  // a picture the copy wouldn't make clearly smaller.
+  const SHRINK_EDGE = 2400;
+  const SHRINK_QUALITY = { 'image/jpeg': 0.85, 'image/webp': 0.85, 'image/png': undefined };
+  const shrinking = new Map(); // path -> the job making its smaller copy
+
+  // Animated PNG ("acTL") and WebP ("ANIM") say so near the start of the file
+  async function isAnimated(file) {
+    const bytes = new Uint8Array(await file.slice(0, 256 * 1024).arrayBuffer());
+    const tag = file.type === 'image/png' ? 'acTL' : file.type === 'image/webp' ? 'ANIM' : '';
+    if (!tag) return false;
+    const code = [...tag].map((ch) => ch.charCodeAt(0));
+    for (let i = 0; i + 4 <= bytes.length; i++) {
+      if (bytes[i] === code[0] && bytes[i + 1] === code[1] && bytes[i + 2] === code[2] && bytes[i + 3] === code[3]) return true;
+    }
+    return false;
+  }
+
+  async function shrinkPicture(file) {
+    if (await isAnimated(file)) return null;
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, SHRINK_EDGE / Math.max(bitmap.width, bitmap.height));
+    if (scale === 1 && file.size <= 500 * 1024) {
+      bitmap.close();
+      return null;
+    }
+    const canvas = h('canvas', { width: Math.round(bitmap.width * scale), height: Math.round(bitmap.height * scale) });
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, file.type, SHRINK_QUALITY[file.type]));
+    // Not every browser can write every format (it falls back to PNG): keep the original then
+    if (!blob || blob.type !== file.type || blob.size > file.size * 0.9) return null;
+    return new File([blob], file.name, { type: file.type, lastModified: Date.now() });
   }
 
   function clearPending() {
     Object.values(window.SITE_ASSET_OVERRIDES).forEach((url) => URL.revokeObjectURL(url));
     window.SITE_ASSET_OVERRIDES = {};
     state.pending.clear();
+    shrinking.clear();
   }
 
   // ---------- Panel shell ----------
@@ -1687,7 +1767,6 @@
     root.classList.toggle('adm-root--full', mode === 'full');
     root.classList.toggle('adm-root--left', dockedLeft());
     if (edgeTab) edgeTab.classList.toggle('is-left', windowState.side === 'left');
-    if (state.draft) document.documentElement.classList.toggle('adm-dock-left', dockedLeft());
     root.style.cssText = '';
     if (mode === 'docked') root.style.width = `${dockWidth()}px`;
     if (mode === 'floating') {
@@ -2212,6 +2291,7 @@
   }
 
   function leaveWizard(message) {
+    wizardStep = null;
     try { sessionStorage.setItem(WIZARD_SKIP_KEY, '1'); } catch { /* storage blocked */ }
     state.tab = 'page';
     state.note = message || '';
@@ -2270,17 +2350,9 @@
     },
     {
       title: 'Pick a look',
-      help: 'A starting point for the colours. Every colour can be fine-tuned later in the Theme tab.',
-      body: (step) => {
-        const theme = state.draft.theme;
-        return h('div', { class: 'adm-form' },
-          // The same chips as the Theme tab, with any schemes saved there (or that came with the site)
-          schemeChips(theme, (scheme) => { useScheme(theme, scheme); changed(); showWizard(step); }),
-          h('div', { class: 'adm-row2' },
-            field('Text font', h('select', { onchange: (e) => { theme.font = e.target.value; changed(); } }, fontChoices(theme, theme.font))),
-            field('Heading font', h('select', { onchange: (e) => { theme.headingFont = e.target.value; changed(); } }, fontChoices(theme, theme.headingFont, 'Same as the text')))),
-          h('p', { class: 'adm-hint', text: 'Your own font files and colour schemes can be added in the Theme tab; they show up here too.' }));
-      },
+      help: 'Hover a colour scheme to try it on the page, click to keep it, then change any colour or font. All of it stays in the Theme tab.',
+      // The same colours and fonts as the Theme tab (with schemes and fonts saved there)
+      body: () => h('div', { class: 'adm-form' }, coloursBox(state.draft.theme), fontsBox(state.draft.theme)),
     },
     {
       title: 'The top of your page',
@@ -2323,7 +2395,7 @@
             onchange: (e) => { setCategoriesFromNames(e.target.value); showTags(); changed(); },
           })),
           preview,
-          h('p', { class: 'adm-hint', text: 'Add your projects afterwards in the Work section of the Page tab: a title, a short description, pictures or videos.' }));
+          h('p', { class: 'adm-hint', text: 'While you edit, each kind has a filter button above the projects (faded until it has one). Click one, then + Add project, and the new project is of that kind. A project’s kind can be changed on its card or in the Work section of the Page tab.' }));
       },
     },
     {
@@ -2392,6 +2464,7 @@
   ];
 
   function showWizard(step = 0) {
+    wizardStep = step;
     const last = WIZARD_STEPS.length - 1;
     const current = WIZARD_STEPS[step];
     setScreen(h('div', { class: 'adm-card adm-wizard' },
@@ -3326,13 +3399,16 @@
     theme.colors.mode = mode;
   }
 
-  function fontChoices(theme, selected, emptyLabel) {
-    const ownFamilies = [...new Set(theme.customFonts.map((f) => f.name.trim()).filter(Boolean))];
-    return [
-      emptyLabel ? h('option', { value: '', text: emptyLabel, selected: !selected }) : null,
-      ownFamilies.length ? h('optgroup', { label: 'Your fonts' }, ownFamilies.map((f) => h('option', { value: f, text: f, selected: selected === f }))) : null,
-      h('optgroup', { label: 'Google Fonts' }, Object.keys(window.SiteTheme.fonts).map((f) => h('option', { value: f, text: f, selected: selected === f }))),
-    ];
+  // The colours and fonts are shown in the Theme tab and in the setup wizard: redraw whichever is open
+  let wizardStep = null; // the setup step showing, or null
+  function redraw() {
+    if (wizardStep === null) {
+      rerenderTab();
+      return;
+    }
+    changed();
+    recordHistory();
+    showWizard(wizardStep);
   }
 
   // ---------- Saved colour schemes ----------
@@ -3399,7 +3475,7 @@
         namingScheme = false;
         const label = nameField.value.trim();
         if (keep && label) saveScheme(theme, label);
-        rerenderTab();
+        redraw();
       };
       nameField = h('input', {
         class: 'adm-chip-name',
@@ -3418,7 +3494,7 @@
       theme.saved.map((scheme, i) => chip(scheme, scheme.name, 'Your saved scheme', manage ? () => {
         if (!confirm(`Delete the saved scheme \u201C${scheme.name}\u201D? The colours you\u2019re using now stay.`)) return;
         theme.saved.splice(i, 1);
-        rerenderTab();
+        redraw();
       } : null)),
       edits ? chip(edits, 'Your edits', 'Colours you changed by hand (not saved as a scheme)') : null,
       nameField || (manage && custom ? h('button', {
@@ -3428,7 +3504,7 @@
         title: 'Save your edits as a scheme, to switch back to later. Saved schemes are kept with the site.',
         onclick: () => {
           namingScheme = true;
-          rerenderTab();
+          redraw();
           const field = screen.querySelector('.adm-chip-name');
           if (field) field.focus();
         },
@@ -3445,7 +3521,7 @@
         type: 'color',
         value,
         oninput: (e) => { theme.colors[key] = e.target.value; window.SiteTheme.apply(theme); scheduleHistory(); },
-        onchange: () => rerenderTab(),
+        onchange: () => redraw(),
       }),
       h('span', { text: label }));
   }
@@ -3463,7 +3539,7 @@
         if (mode === value) return;
         switchMode(theme, value);
         T.apply(theme);
-        rerenderTab();
+        redraw();
       },
     });
     return h('div', { class: 'adm-form adm-group-box', 'data-adm-section': 'colours' },
@@ -3473,9 +3549,9 @@
           modeButton('dark', 'Dark'), modeButton('light', 'Light')),
         hasOwnColours(theme) ? iconBtn('\u21BA', 'Back to the scheme\u2019s own colours', () => {
           useScheme(theme, { preset: theme.preset, colors: {} });
-          rerenderTab();
+          redraw();
         }) : null),
-      schemeChips(theme, (scheme) => { useScheme(theme, scheme); rerenderTab(); }, true),
+      schemeChips(theme, (scheme) => { useScheme(theme, scheme); redraw(); }, true),
       h('div', { class: 'adm-colors' }, MAIN_COLORS.map((spec) => colourSwatch(theme, colors, spec))),
       h('details', {
         class: 'adm-more-colours',
@@ -3519,7 +3595,7 @@
               if (theme.font === f.name) theme.font = 'Geologica';
               if (theme.headingFont === f.name) theme.headingFont = '';
             }
-            rerenderTab();
+            redraw();
           })),
         h('div', { class: 'adm-row3' },
           field('Font name', text(f, 'name', {
@@ -3527,7 +3603,7 @@
               // Keep the family picked as text or heading font when it's renamed
               if (theme.font === oldNames[i]) theme.font = f.name;
               if (theme.headingFont === oldNames[i]) theme.headingFont = f.name;
-              rerenderTab();
+              redraw();
             },
           })),
           field('Weight', h('select', { onchange: (e) => { f.weight = e.target.value; changed(); } },
@@ -3542,7 +3618,7 @@
         const path = stageFile(file, `assets/fonts/${slug(file.name.replace(/\.[a-z0-9]+$/i, ''))}-${Date.now().toString(36)}${ext}`);
         if (!path) return;
         fonts.push({ ...guess, file: path });
-        rerenderTab();
+        redraw();
       }),
       h('span', { class: 'adm-hint', text: 'Upload a font file (.woff2 is smallest), then pick it by name above. Files with the same name form one family: add a bold or italic file and set its weight and style, or leave a variable font on “All weights”. Make sure the font’s licence allows use on a website.' }));
   }
@@ -3577,7 +3653,7 @@
       onclick: () => {
         theme[key] = name;
         openFontPicker = null;
-        rerenderTab();
+        redraw();
       },
     }, sample(name), h('span', { class: 'adm-font-name', style: name ? `font-family:${fontCss(name)}` : null, text: text || name }));
     return h('div', { class: 'adm-field' },
@@ -3586,7 +3662,7 @@
         class: `adm-font-current${isOpen ? ' is-open' : ''}`,
         type: 'button',
         'aria-expanded': String(isOpen),
-        onclick: () => { openFontPicker = isOpen ? null : key; rerenderTab(); },
+        onclick: () => { openFontPicker = isOpen ? null : key; redraw(); },
       }, sample(current), h('span', { class: 'adm-font-name', text: current || emptyLabel }), h('span', { class: 'adm-hint', text: isOpen ? 'Close' : 'Change' })),
       isOpen ? h('div', { class: 'adm-fonts' },
         emptyLabel ? option('', emptyLabel) : null,
@@ -3612,20 +3688,28 @@
 
   let ownFontsOpen = false;
 
+  // For Theme sliders: the page restyles while one is dragged
+  const restyle = (theme) => () => window.SiteTheme.apply(theme);
+
+  function fontsBox(theme) {
+    return h('div', { class: 'adm-form adm-group-box' },
+      h('h3', { class: 'adm-group', text: 'Fonts' }),
+      fontPicker(theme, 'font', 'Text'),
+      fontPicker(theme, 'headingFont', 'Headings', 'Same as the text'),
+      h('p', { class: 'adm-hint', text: 'Headings are your name, the section titles, card titles and the logo.' }),
+      check(theme, 'titleDot', 'A full stop in the accent colour after section titles'),
+      ownFontsOpen || theme.customFonts.length ? customFontsBox(theme)
+        : h('div', null, h('button', { class: 'adm-btn', type: 'button', text: '+ Your own font', onclick: () => { ownFontsOpen = true; redraw(); } })));
+  }
+
   function themeTab() {
     const theme = state.draft.theme;
     return h('div', { class: 'adm-form' },
       h('p', { class: 'adm-help', text: 'Colours, fonts and corners for the whole site. Hover a scheme to try it on the page, click to keep it, then fine-tune any colour.' }),
       coloursBox(theme),
-      h('div', { class: 'adm-form adm-group-box' },
-        h('h3', { class: 'adm-group', text: 'Fonts' }),
-        fontPicker(theme, 'font', 'Text'),
-        fontPicker(theme, 'headingFont', 'Headings', 'Same as the text'),
-        h('p', { class: 'adm-hint', text: 'Headings are your name, the section titles, card titles and the logo.' }),
-        ownFontsOpen || theme.customFonts.length ? customFontsBox(theme)
-          : h('div', null, h('button', { class: 'adm-btn', type: 'button', text: '+ Your own font', onclick: () => { ownFontsOpen = true; rerenderTab(); } }))),
+      fontsBox(theme),
       fold('corners', 'Corners', `${theme.radius} px`,
-        slider(theme, 'radius', 'Corner roundness', 0, 28, 2, ' px', 'Cards, the showreel frame and pop-ups.')),
+        slider(theme, 'radius', 'Corner roundness', 0, 28, 2, ' px', 'Cards, the showreel frame and pop-ups.', restyle(theme))),
       cursorBox(theme));
   }
 
@@ -3890,14 +3974,14 @@
       },
         CURSOR_STYLES.map(([value, label]) => h('option', { value, text: label, selected: style === value })))),
       style === 'dot' || style === 'label' ? [
-        slider(cur, 'size', 'Dot size', 8, 30, 1, ' px'),
+        slider(cur, 'size', 'Dot size', 8, 30, 1, ' px', null, restyle(theme)),
         colour(),
         grow(),
         style === 'label' ? h('p', { class: 'adm-hint', text: 'Over a project it becomes a circle saying \u201CView\u201D, or \u201CPlay\u201D when the project has videos. The words follow the site\u2019s language (Site tab \u2192 Languages \u2192 interface text).' }) : null,
       ] : null,
       style === 'spotlight' ? [
-        slider(cur, 'glowSize', 'Glow size', 150, 600, 10, ' px'),
-        slider(cur, 'glowStrength', 'Glow strength', 5, 40, 1, '%'),
+        slider(cur, 'glowSize', 'Glow size', 150, 600, 10, ' px', null, restyle(theme)),
+        slider(cur, 'glowStrength', 'Glow strength', 5, 40, 1, '%', null, restyle(theme)),
         choice(cur, 'glowColor', 'Glow colour', [['accent', 'Main accent'], ['accent2', 'Second accent']]),
       ] : null,
       style === 'image' ? [
@@ -3909,7 +3993,7 @@
             cur.image ? h('button', { class: 'adm-link', type: 'button', text: 'Remove', onclick: () => { cur.image = ''; delete cur.frames; if (cur.tip === 'hotspot') cur.tip = 'center'; rerenderTab(); } }) : null),
           filePicker('image/png,image/svg+xml,image/gif,image/webp,.png,.svg,.gif,.webp,.ani,.cur,.ico', (file) => pickCursor(cur, file)),
           h('span', { class: 'adm-hint', text: 'A PNG or SVG with a transparent background, or a cursor file: .cur or animated .ani (Windows), or a file from a Linux cursor theme (Xcursor, e.g. left_ptr from the theme’s cursors folder; choose “All files” to see it). Animations play at their own speed. Until there is one, a dot is shown.' })),
-        slider(cur, 'size', 'Size', 16, 96, 2, ' px'),
+        slider(cur, 'size', 'Size', 16, 96, 2, ' px', null, restyle(theme)),
         choice(cur, 'tip', 'Where it points', [
           ...(cur.frames && cur.frames.hotX !== null ? [['hotspot', 'Where the cursor file says']] : []),
           ['center', 'The middle of the image'], ['top-left', 'The top-left corner (for arrow shapes)']]),
@@ -4132,11 +4216,25 @@
     ];
   }
 
+  // The title above the message form: interface text, in the editing language (empty = the standard one)
+  function formTitleField() {
+    const { obj, key } = fieldSlot('ui:contact.formTitle');
+    const texts = (window.SITE_UI_TEXT || {})['contact.formTitle'] || {};
+    const standard = texts[lang()] || texts.en || '';
+    return field('Form title', bind(h('input', {
+      type: 'text',
+      value: obj[key] || '',
+      placeholder: standard,
+      oninput: (e) => { obj[key] = e.target.value; changed(); },
+    }), obj, key), 'You can also click it on the page and type.');
+  }
+
   function contactEditor() {
     return [
       partToggles([['contact.intro', 'Intro line'], ['contact.form', 'Message form'], ['contact.linkedin', 'LinkedIn button'],
         ['contact.socials', 'Social icons'], ['contact.email', 'Email address']]),
       field('Intro line', area(state.draft.intros, 'contact', 2)),
+      formTitleField(),
       h('p', { class: 'adm-hint', text: 'Your email address, social links and how the form sends messages are in the Site tab.' }),
     ];
   }
@@ -4317,6 +4415,10 @@
         h('p', { class: 'adm-hint', text: 'Shows this section’s projects ticked “Featured”, one slide at a time. These settings are shared by all Work sections.' }),
         check(hl, 'autoplay', 'Move to the next project by itself'),
         slider(hl, 'seconds', 'Time per slide', 3, 20, 1, ' s')),
+      h('div', { class: 'adm-form adm-group-box' },
+        h('h3', { class: 'adm-group', text: 'Opening a project' }),
+        choice(c, 'projectView', 'A project opens', [['popup', 'In a pop-up over the page'], ['page', 'As a page of its own']],
+          'Either way, each project has its own link to share (open a project below to copy it), and the back button closes it. Shared by all Work sections.')),
       projectsList(entries, set.categories[0] || (c.categories[0] || {}).id),
     ];
   }
@@ -4866,6 +4968,40 @@
       }));
   }
 
+  // A project's own address, to share. Its end follows the title unless a link name is set (then a
+  // shared link keeps working when the title changes).
+  function projectLink(item) {
+    const work = state.draft.work;
+    const link = () => window.SiteProjects.link(window.SiteProjects.slugs(work)[work.indexOf(item)]);
+    const shown = h('span', { class: 'adm-path adm-grow', text: link() });
+    const copy = h('button', {
+      class: 'adm-btn',
+      type: 'button',
+      text: 'Copy link',
+      onclick: async () => {
+        try {
+          await navigator.clipboard.writeText(link());
+          copy.textContent = 'Copied';
+        } catch {
+          copy.textContent = 'Select and copy it';
+        }
+        setTimeout(() => { copy.textContent = 'Copy link'; }, 1600);
+      },
+    });
+    return h('div', { class: 'adm-field' },
+      h('span', { class: 'adm-label', text: 'Link to this project' }),
+      h('div', { class: 'adm-inline' }, shown, copy),
+      h('input', {
+        type: 'text',
+        value: item.slug || '',
+        placeholder: 'Link name (optional), e.g. startup-awards',
+        'aria-label': 'Link name',
+        maxLength: 60,
+        oninput: (e) => { item.slug = e.target.value; shown.textContent = link(); changed(); },
+      }),
+      h('span', { class: 'adm-hint', text: 'Without a link name, the link follows the title. Set one before sharing the link, so it keeps working if you rename the project.' }));
+  }
+
   function workForm(item) {
     const typeSelect = h('select', { onchange: (e) => { item.type = e.target.value; rerenderTab(); } },
       state.draft.categories.map((cat) => h('option', { value: cat.id, text: cat.label || cat.id, selected: item.type === cat.id })));
@@ -4873,6 +5009,7 @@
 
     const form = h('div', { class: 'adm-form' },
       h('div', { class: 'adm-row2' }, field('Category', typeSelect), field('Title', text(item, 'title'))),
+      projectLink(item),
       h('label', { class: 'adm-check' },
         h('input', { type: 'checkbox', checked: Boolean(item.featured), onchange: (e) => { item.featured = e.target.checked; rerenderTab(); } }),
         h('span', { text: 'Featured: shown in the Highlights slider at the top of Work (and still in the grid)' })),
@@ -4884,7 +5021,7 @@
         field('Year', text(item, 'year', { placeholder: 'e.g. 2025' })),
         field('Your role', text(item, 'role', { placeholder: 'e.g. Editing, sound' }))),
       field('Teaser (shown on the card)', text(item, 'teaser')),
-      field('Full description (shown in the pop-up)', area(item, 'desc', 5)),
+      field('Full description (shown when the project is opened)', area(item, 'desc', 5)),
       field('Tools', list(item, 'tools', { placeholder: 'Premiere Pro, After Effects' }), 'Separate with commas.'),
       videosField(item),
       picturesField(item.images, item.title, { empty: 'Shown in the pop-up after the videos, with arrows and thumbnails. You can pick several files at once.' }),
@@ -5054,13 +5191,19 @@
       h('span', { text: label }));
   }
 
-  function slider(obj, key, label, min, max, step, unit, hint) {
+  // `live`: restyles the page while dragging (instead of redrawing it), which then happens once it's let go
+  function slider(obj, key, label, min, max, step, unit, hint, live) {
     const shown = h('span', { class: 'adm-value', text: `${obj[key]}${unit}` });
     return h('label', { class: 'adm-field' },
       h('span', { class: 'adm-label' }, label, ' ', shown),
       h('input', {
         type: 'range', min, max, step, value: obj[key],
-        oninput: (e) => { obj[key] = Number(e.target.value); shown.textContent = `${obj[key]}${unit}`; changed(); },
+        oninput: (e) => {
+          obj[key] = Number(e.target.value);
+          shown.textContent = `${obj[key]}${unit}`;
+          if (live) { live(); scheduleHistory(); } else changed();
+        },
+        onchange: live ? () => changed() : null,
       }),
       hint ? h('span', { class: 'adm-hint', text: hint }) : null);
   }
@@ -5409,6 +5552,7 @@
         item.videos.forEach((clip) => { delete clip._mode; });
         item.links = item.links.filter((l) => l.label && l.url);
         if (!item.draft) delete item.draft;
+        if (!item.slug) delete item.slug;
       });
       content.customSections.forEach((sec) => {
         delete sec._mode;
@@ -5422,6 +5566,10 @@
       content.savedAt = new Date().toISOString();
 
       // Everything goes in one commit (uploads, content, index.html), so the host publishes once
+      if (shrinking.size) {
+        updateStatus('Making pictures smaller…');
+        await Promise.all(shrinking.values());
+      }
       const used = referencedPaths(content);
       const uploads = [...state.pending].filter(([path]) => used.has(path));
       const entries = [];

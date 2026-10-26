@@ -439,6 +439,24 @@ html:not(.adm-editing) [data-placeholder].is-empty,
 /* Item bar: just above the item (over the picture on cards) */
 .adm-item-bar { bottom: 100%; right: 0; padding: 2px; z-index: 31; }
 .adm-item-bar .adm-bar-btn { min-width: 26px; height: 26px; padding: 0 6px; }
+[data-entry]:focus-within > .adm-item-bar { visibility: visible; opacity: 1; transition-delay: 0s; }
+
+/* A project's category, on its card */
+.adm-bar-select {
+  max-width: 130px;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+/* While editing, every category has a filter button; one without projects yet is faded */
+.adm-editing .filter-btn.is-empty { opacity: 0.55; border-style: dashed; }
 .work-card > .adm-item-bar,
 .quote-card > .adm-item-bar,
 .gallery-item > .adm-item-bar { top: 8px; left: 8px; bottom: auto; }
@@ -1194,19 +1212,6 @@ html:not(.adm-editing) [data-placeholder].is-empty,
 .adm-edge.is-left { right: auto; left: 0; border-radius: 0 10px 10px 0; box-shadow: 6px 0 20px rgba(0, 0, 0, 0.4); }
 .adm-phone.is-beside-panel.is-left { padding-right: 0; padding-left: var(--adm-w, 460px); }
 .adm-win-side { font-size: 1rem; }
-
-/* ...and the page's editing bars go to the right, where the panel doesn't cover them */
-html.adm-dock-left .adm-section-bar { left: auto; right: 12px; }
-html.adm-dock-left .adm-item-bar { left: auto; right: 0; }
-html.adm-dock-left :is(.work-card, .quote-card, .gallery-item) > .adm-item-bar { left: auto; right: 8px; }
-html.adm-dock-left .adm-pencil { left: auto; right: 10px; }
-
-
-@media (min-width: 1100px) {
-  html.adm-dock-left .contact-socials > .adm-pencil,
-  html.adm-dock-left .contact-alt > .adm-pencil { left: auto; right: -50px; }
-  html.adm-dock-left .footer-links > .adm-pencil { left: auto; right: -48px; }
-}
 
 /* Pages: Home and the others to switch between, and "+ New page" */
 .adm-page-pills { display: flex; flex-wrap: wrap; gap: 6px; }

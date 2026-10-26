@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<title>Page not found</title>
+<!-- GitHub Pages shows this for any address that doesn't exist. It finds the site's home page (the site can
+     live at the domain's root or in a folder named after the repository) and goes there, where a note says
+     the page didn't exist. Without JavaScript, or if the home page can't be found, the text below shows. -->
+<style>
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    box-sizing: border-box;
+    background: #0c0907;
+    color: #f7f1ea;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    text-align: center;
+  }
+  h1 { margin: 0 0 8px; font-size: 1.6rem; }
+  p { margin: 0 0 20px; color: #b3a596; }
+  a { color: inherit; padding: 10px 20px; border: 1px solid #2e2620; border-radius: 999px; text-decoration: none; }
+  a:hover { border-color: currentColor; }
+</style>
+</head>
+<body>
+<main>
+  <h1>This page doesn't exist</h1>
+  <p>The link may be old or mistyped.</p>
+  <a id="home" href="/">Go to the home page</a>
+</main>
+<script>
+  (async () => {
+    const first = window.location.pathname.split('/').filter(Boolean)[0];
+    const bases = [...(first ? [`/${first}/`] : []), '/'];
+    for (const base of bases) {
+      try {
+        const answer = await fetch(`${base}content/site.js`, { method: 'HEAD', cache: 'no-store' });
+        if (answer.ok) {
+          document.getElementById('home').href = base;
+          window.location.replace(`${base}?missing`);
+          return;
+        }
+      } catch {
+        // offline: the text above stays
+      }
+    }
+  })();
+</script>
+</body>
+</html>
