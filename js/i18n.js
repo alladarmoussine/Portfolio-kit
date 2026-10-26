@@ -64,6 +64,16 @@ window.SITE_UI_TEXT = {
   'contact.message': { en: 'Message', nl: 'Bericht', fr: 'Message', ro: 'Mesaj' },
   'contact.send': { en: 'Send message', nl: 'Verstuur bericht', fr: 'Envoyer le message', ro: 'Trimite mesajul' },
   'contact.linkedin': { en: 'Connect on LinkedIn', nl: 'Vind me op LinkedIn', fr: 'Voir mon LinkedIn', ro: 'Conectează-te pe LinkedIn' },
+  'contact.sending': { en: 'Sending…', nl: 'Versturen…', fr: 'Envoi…', ro: 'Se trimite…' },
+  'contact.sent': { en: 'Thanks! Your message has been sent.', nl: 'Bedankt! Je bericht is verstuurd.', fr: 'Merci ! Votre message a été envoyé.', ro: 'Mulțumesc! Mesajul tău a fost trimis.' },
+  'contact.failed': { en: 'Sorry, the message couldn’t be sent.', nl: 'Sorry, het bericht kon niet worden verstuurd.', fr: 'Désolé, le message n’a pas pu être envoyé.', ro: 'Ne pare rău, mesajul nu a putut fi trimis.' },
+  'contact.failedEmail': { en: 'Send it by email instead', nl: 'Stuur het dan per e-mail', fr: 'Envoyez-le plutôt par e-mail', ro: 'Trimite-l prin e-mail' },
+  'contact.noteDirect': {
+    en: 'Your message goes straight to {first}.',
+    nl: 'Je bericht gaat rechtstreeks naar {first}.',
+    fr: 'Votre message est envoyé directement à {first}.',
+    ro: 'Mesajul tău ajunge direct la {first}.',
+  },
   'contact.note': {
     en: 'Sending opens your email app with the message pre-filled, addressed to {first}.',
     nl: 'Bij verzenden opent je e-mailapp met het bericht al ingevuld, gericht aan {first}.',

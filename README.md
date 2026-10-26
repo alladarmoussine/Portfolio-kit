@@ -37,8 +37,9 @@ it theirs without touching code. See [Making a copy for someone else](#making-a-
    with small titles so they read as part of Work.
 6. **Contact** (`#contact`): message form, email, LinkedIn and social icons.
 
-All sections below the top section can be reordered, renamed, restyled, hidden or removed in the
-admin panel's **Page** tab, which can also add Text sections and more Work grids.
+All sections can be reordered in the admin panel's **Page** tab, the top section included (it
+fades into whatever comes after it); the others can also be renamed, restyled, hidden, removed or
+moved to another page, and new ones added.
 
 ## Admin panel
 
@@ -67,15 +68,31 @@ kept in that browser. Your password is never stored anywhere. Do this once on yo
 once on your laptop; after that, the password alone unlocks the panel. If you clear the
 browser's site data, just set it up again.
 
+**Recovery code:** right after setup the panel shows a recovery code once
+(`XXXX-XXXX-XXXX-XXXX-XXXX-XXXX`); keep it on paper or in a password manager. If you forget the
+password, **Forgot your password?** on the unlock screen takes the code and a new password. Like
+the password, the code only works in the browser that was set up (only a second encrypted copy of
+the token is kept there, never the code). The Site tab's **Recovery code** box makes a new one (the
+old one stops working). Without a code, **Forgot your password?** shows how to set the panel up
+again with a new GitHub token; nothing on the site is lost either way.
+
 ### Using it
 - **Tabs:** **Page** (everything on the page), **Site** (who it belongs to and where it links to)
-  and **Theme** (colours, fonts, corners).
-- **Page:** the page as an outline, from the top section to the footer. Click a row to edit
+  and **Theme** (colours, fonts, corners). Long help texts show their first sentence; **more**
+  shows the rest.
+- **Pages:** besides the home page, **+ New page** (top of the Page tab) makes a page with its own
+  address (`?page=services`), a link in the menu and its own sections. Click a page's name to see
+  and edit it (links in the site's menu switch pages too, without reloading). Set its title, menu
+  label, address and place in the menu, or delete it (its sections move to the home page). A
+  section moves to another page with **On the page** in its settings. Stored as `pages` in
+  `content/site.js`; the home page's sections stay in `sections.order`.
+- **Page:** the page shown as an outline, from the top section to the footer. Click a row to edit
   that section right there; the page behind scrolls to it. Drag ⠿ (or use the arrows) to change
-  the order, and use the eye to show or hide a section. Every section's editor starts with the
-  same settings: title, menu label, "show in the menu" and a **link name** (e.g. `services`, so
-  the section's address ends in `#services` instead of its code name). Folded under them,
-  **Look and layout**: background (page, second, or your own colour or picture, with the text
+  the order, and use the eye to show or hide a section. An open section has three tabs:
+  **Content** (its title, then its text, pictures, projects…), **Layout** (below) and **Settings**:
+  menu label, "show in the menu", a **link name** (e.g. `services`, so the section's address ends
+  in `#services` instead of its code name), which page it's on, and duplicate or delete. Under
+  **Layout**, its look: background (page, second, or your own colour or picture, with the text
   turning light or dark to read on it), title style and size (*large* with a dot, or *small*
   with an accent line), width (narrow, normal, wide, full), space around (compact, normal,
   roomy) and **Show on** (all screens, computers only, phones only; its menu link follows). A
@@ -89,9 +106,11 @@ browser's site data, just set it up again.
   quote per row; a Text section's picture below, above, right or left. Stored as
   `sections.<id>.layout` (a Text section: its `imagePlace`).
 - **Parts:** a section's title, intro, text, video, list… can be put in another order and each
-  aligned (left, centre, right), given more or less space above, or made narrower. In **Look and
-  layout** under **Parts**, or on the page: open the section, hover a part, and use the column of
-  controls on its left (drag ⠿ to move it). **Reset parts** puts them back. Stored as
+  aligned (left, centre, right), given more or less space above, or made narrower. In the
+  **Layout** tab under **Parts**, or on the page: in the section open in the panel, hovering a part
+  shows its name, and clicking it (or into its text) puts a small toolbar above it: ↑ ↓ to move it,
+  one alignment button that goes as it was → left → centre → right, space above (− +), width and
+  ↺. **Reset parts** puts them all back. Stored as
   `sections.<id>.blockOrder` and `blockLook`; an untouched section stores nothing, and on
   phones the parts stay one under the other.
 - **Adding sections:** **+ Add section** offers:
@@ -125,16 +144,27 @@ browser's site data, just set it up again.
 - **Site:** your name, page title and description, the link preview picture and site address, the browser-tab icon (letters in your theme
   colours, or upload your own square PNG, SVG or .ico), the languages, the GitHub repository, your
   email and social links (and which ones are in the footer), and analytics.
-- **Theme:** six presets (four dark, two light) as a starting point, then any colour can be
-  changed: backgrounds, cards, borders, text, the two accent colours, text on buttons, and the
-  top section's background and text. "Light or dark" swaps the backgrounds and text colours and
-  keeps the accents. The top section stays dark on light themes so its text reads on photos and
-  video. **Your colour schemes** keeps colour combinations to switch back to: name the current
-  colours and press **Save current colours**; click a saved scheme to use it again (stored as
-  `theme.saved`, so they're there on every computer). Also the text and heading fonts and corner
-  roundness. Fonts come from a Google Fonts list,
-  or upload your own font files (.woff2, .woff, .ttf, .otf; saved in `assets/fonts/`): files with
-  the same name form one family, each with its weight and style (stored as `theme.customFonts`).
+- **Contact form** (Site tab, under Links): by default, sending opens the visitor's email app with
+  the message filled in. To have messages sent from the page instead, pick a free form service and
+  paste its key: **Web3Forms** (250 a month: type your email on web3forms.com and the access key
+  arrives in that inbox, no account) or **Formspree** (50 a month: the ID at the end of your form's
+  `formspree.io/f/…` address). **Send a test message** checks it. Visitors see "Sending…", then a
+  thank-you; if sending fails, they're offered to send it by email instead, with their message in
+  it. A hidden field catches spam robots. Stored as `contactForm` (`service`, `key`); the key is
+  meant to be public.
+- **Theme:** one **Colours** box. A row of scheme chips holds the six presets (four dark, two
+  light) and your saved schemes: hover one to see it on the page, click to keep it. Below are the
+  four main colours (background, text, two accents) and, under **More colours**, the rest
+  (sections, cards, lines, soft text, text on buttons, the top section's background and text).
+  The page recolours while a colour is dragged. **Dark / Light** swaps the backgrounds and text
+  and keeps the accents; the top section stays dark on light themes so its text reads on photos
+  and video. Colours changed by hand show as a **Your edits** chip, kept when you try another
+  scheme; **+ Save** names them as a scheme (stored as `theme.saved`, so they're there on every
+  computer), and ↺ goes back to the scheme's own colours. Also the text and heading fonts, each shown
+  written in itself to pick from (a Google Fonts list, plus your own under **+ Your own font**:
+  upload font files (.woff2, .woff, .ttf, .otf; saved in `assets/fonts/`): files with
+  the same name form one family, each with its weight and style (stored as `theme.customFonts`)).
+  **Corners** and **Mouse effect** are folded to one line saying how they're set; click to change.
 - **Removing things:** the eye hides a whole section, and the ticks in a section's editor hide its
   parts. Nothing is deleted; show it again to bring it back. Menu links pointing to a hidden
   section are hidden too. Stored as `hidden` in `content/site.js`. While the panel is open,
@@ -169,10 +199,12 @@ browser's site data, just set it up again.
   Admin tab) brings everything back.
 - **Phone preview (📱):** shows the page at phone width in a frame beside the panel, with your
   unsaved changes, following every edit. Opening a section in the Page tab scrolls it there too.
-- **Detach (⧉) and full screen (⤢):** the buttons next to – turn the panel into a window you
-  can drag by its title bar and resize from its bottom-right corner, or spread it over the whole
-  page. Press the same button again to dock it back on the right. Each browser remembers its own
-  choice and the window's size and position.
+- **Docked (the standard):** the panel sits beside the page, and the page makes room for it, so
+  nothing is hidden under it. Drag the panel's inner edge to make it wider or narrower.
+- **⋯ menu (top bar):** **Dock on the left/right side** (⇆; the editing bars on the page swap sides
+  too), **Detach** (⧉: a window you drag by its title bar and resize from any edge or corner),
+  **Full screen** (⤢) and **Lock**. Choose Detach or Full screen again to dock. Each browser
+  remembers its own choice, the docked width and the window's size and position.
 - **Minimise (–):** slides the panel off to the right and leaves an **Admin** tab on the
   edge (with an orange dot if there are unsaved changes). Click the tab, a ✎, or the
   shortcut to bring it back.

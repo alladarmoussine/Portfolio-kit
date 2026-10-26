@@ -224,7 +224,10 @@
     // defaults for its kind filled in (see SECTION_LOOK in js/main.js)
     c.sections = c.sections || {};
     c.sections.removed = Array.isArray(c.sections.removed) ? c.sections.removed : [];
-    c.sections.order = window.SiteSections.order(c);
+    // Pages besides the home page, each with its own sections (see "Pages" in js/main.js)
+    c.pages = (Array.isArray(c.pages) ? c.pages : []).map((pg) => ({ title: '', nav: '', inMenu: true, ...pg, order: Array.isArray(pg.order) ? pg.order : [] }));
+    c.sections.order = window.SiteSections.order(c, '');
+    c.pages.forEach((pg) => { pg.order = window.SiteSections.order(c, pg.id); });
     [...window.SiteSections.builtin, ...c.workGrids.map((g) => g.id), ...c.customSections.map((sec) => sec.id)].forEach((id) => {
       // Text sections from before kept their title and menu settings on the section itself
       const legacy = c.customSections.find((sec) => sec.id === id) || {};
@@ -255,6 +258,7 @@
     c.customLinks = (c.customLinks || []).map((link) => ({ label: '', url: '', footer: false, ...link }));
     c.footerLinks = Array.isArray(c.footerLinks) ? c.footerLinks : [...DEFAULT_FOOTER_LINKS];
     c.analytics = c.analytics || { cloudflareToken: '' };
+    c.contactForm = { service: '', key: '', ...(c.contactForm || {}) };
     c.highlights = { autoplay: true, seconds: 6, ...(c.highlights || {}) };
     c.hidden = c.hidden || {};
     // Content saved before these existed: start from what the page currently shows
@@ -649,14 +653,21 @@
 
   // Centred in the space left of the docked panel
   function placePhone() {
-    if (phone) phone.wrap.classList.toggle('is-beside-panel', windowState.mode === 'docked' && !isMinimised());
+    if (!phone) return;
+    phone.wrap.classList.toggle('is-beside-panel', windowState.mode === 'docked' && !isMinimised());
+    phone.wrap.classList.toggle('is-left', dockedLeft());
   }
 
   function syncPhone() {
     const win = phone && phone.frame.contentWindow;
     if (!win || !win.renderSite || !state.draft) return;
     win.SITE_ASSET_OVERRIDES = window.SITE_ASSET_OVERRIDES;
-    win.renderSite(win.JSON.parse(JSON.stringify(state.draft)));
+    const draft = win.JSON.parse(JSON.stringify(state.draft));
+    if (win.SitePages && win.SitePages.current() !== shownPage()) {
+      win.renderSite(draft); // so it knows the pages
+      win.SitePages.show(shownPage());
+    }
+    win.renderSite(draft);
     if (win.SiteI18n && win.SiteI18n.lang !== lang()) win.SiteI18n.setLanguage(lang());
   }
 
@@ -669,7 +680,7 @@
 
   const itemFields = (item) => [...(item.matches('[data-field]') ? [item] : []), ...item.querySelectorAll('[data-field]')];
   // Everything the panel adds to the page
-  const CHROME = '.adm-pencil, .adm-section-bar, .adm-insert, .adm-item-bar, .adm-add-tile, .adm-block-bar';
+  const CHROME = '.adm-pencil, .adm-section-bar, .adm-insert, .adm-item-bar, .adm-add-tile, .adm-part-bar, .adm-part-tag';
   const getPath = (path) => path.split('.').reduce((node, key) => (node == null ? node : node[key]), state.draft);
   const sectionOf = (node) => {
     const section = node.closest('[data-adm-row]');
@@ -698,6 +709,7 @@
 
   function decoratePage() {
     document.documentElement.classList.add('adm-editing');
+    document.documentElement.classList.toggle('adm-dock-left', dockedLeft());
     document.querySelectorAll(CHROME).forEach((node) => node.remove());
     // ✎ for things without text to type: their form in the panel
     document.querySelectorAll('[data-edit-item]').forEach((item) => {
@@ -716,8 +728,8 @@
       }));
     });
     // A bar on every section, and "+ Add section" above each one (and below the last)
-    const order = state.draft.sections.order;
-    [['hero', document.querySelector('.hero')], ...order.map((id) => [id, document.getElementById(id)]), ['footer', document.querySelector('.site-footer')]]
+    const order = pageOrder();
+    [...order.map((id) => [id, document.getElementById(id)]), ['footer', document.querySelector('.site-footer')]]
       .forEach(([id, node]) => {
         if (!node) return;
         node.dataset.admRow = id;
@@ -733,7 +745,7 @@
   function undecoratePage() {
     stopEditing();
     previewing = false;
-    document.documentElement.classList.remove('adm-editing', 'adm-previewing');
+    document.documentElement.classList.remove('adm-editing', 'adm-previewing', 'adm-dock-left');
     document.querySelectorAll(`${CHROME}, .adm-preview-pill`).forEach((node) => node.remove());
     document.querySelectorAll('[data-adm-row]').forEach((node) => {
       node.classList.remove('adm-selected');
@@ -895,7 +907,6 @@
   }
 
   const ALIGNS = ['', 'left', 'center', 'right'];
-  const WIDTHS = ['', 'medium', 'narrow'];
   const SPACES = [[-2, 'Less space above'], [-1, 'A bit less'], [0, 'Space above: as is'], [1, 'A bit more'], [2, 'More'], [3, 'Much more'], [4, 'Most']];
 
   // Panel (Look and layout): every part with its order, alignment, space above and width
@@ -915,7 +926,7 @@
       h('div', { class: 'adm-section-head' },
         h('span', { class: 'adm-label', text: 'Parts' }),
         set.blockOrder || set.blockLook ? h('button', { class: 'adm-link', type: 'button', text: 'Reset parts', onclick: () => resetBlocks(id) }) : null),
-      h('p', { class: 'adm-hint', text: 'Their order, alignment, space above and width. On the page, open this section and hover a part for the same controls on its left.' }),
+      h('p', { class: 'adm-hint', text: 'Their order, alignment, space above and width. On the page, click a part of this section for the same controls above it.' }),
       names.map((name, i) => h('div', { class: 'adm-part-row' },
         h('span', { class: 'adm-part-name', text: BLOCK_LABELS[name] || name }),
         h('div', { class: 'adm-row-controls' },
@@ -927,87 +938,87 @@
   }
 
   // ---------- Parts on the page ----------
-  // The section open in the panel: hovering one of its parts shows a small column of controls on its left
+  // In the section open in the panel, hovering a part outlines it with its name. Clicking it (or into its
+  // text) selects it: a toolbar above it moves it and sets its alignment, space above and width. The
+  // toolbar sits next to the part, not in it, so it stays while the part's text is typed in.
   const ALIGN_ICON = (a) => {
     const x = { left: [4, 4, 4], center: [6, 4, 8], right: [8, 4, 12] }[a] || [4, 4, 4];
     const w = a ? [12, 16, 8] : [16, 16, 16];
     return `<svg viewBox="0 0 24 24" aria-hidden="true">${[7, 12, 17].map((y, i) => `<path d="M${x[i]} ${y}h${w[i]}"/>`).join('')}</svg>`;
   };
-  const WIDTH_ICON = (wd) => {
-    const half = { '': 9, medium: 6, narrow: 3 }[wd || ''];
-    return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5v14M21 5v14"/><path d="M${12 - half} 12h${half * 2}"/></svg>`;
-  };
+  let selectedPart = null; // { id: the section, name: the part }
 
   function decorateBlocks() {
-    document.querySelectorAll('.adm-block-bar').forEach((bar) => bar.remove());
+    document.querySelectorAll('.adm-part-bar, .adm-part-tag').forEach((node) => node.remove());
+    document.querySelectorAll('.adm-part-selected').forEach((node) => node.classList.remove('adm-part-selected'));
     const id = state.openRow;
     const section = id && state.draft.sections[id] && document.querySelector(`[data-adm-row="${id}"]`);
     if (!section) return;
-    const names = shownBlocks(id);
-    if (names.length < 2) return;
-    section.querySelectorAll('[data-blocks] > [data-block]').forEach((node) => {
+    const parts = [...section.querySelectorAll('[data-blocks] > [data-block]')];
+    parts.forEach((node) => {
       if (editing && editing.node === node) return; // not inside the text being typed
-      const name = node.dataset.block;
-      const label = BLOCK_LABELS[name] || name;
-      const i = names.indexOf(name);
-      const look = blockLookOf(id, name);
-      const next = (list, value) => list[(list.indexOf(value || '') + 1) % list.length];
-      const space = Number(look.space) || 0;
-      const handle = h('span', { class: 'adm-bar-btn adm-block-handle', title: `${label}: drag to move it`, text: '⠿' });
-      handle.addEventListener('pointerdown', (e) => dragBlock(e, id, name, node));
-      node.appendChild(h('div', { class: 'adm-block-bar' },
-        handle,
-        barBtn('↑', `Move ${label} up`, () => moveBlockBy(id, name, -1), { disabled: i === 0 }),
-        barBtn('↓', `Move ${label} down`, () => moveBlockBy(id, name, 1), { disabled: i === names.length - 1 }),
-        barBtn(ALIGN_ICON(look.align), `Alignment: ${look.align || 'as is'} (click for the next)`, () => blockChange(id, name, () => setBlockLook(id, name, 'align', next(ALIGNS, look.align))), { html: true, pressed: Boolean(look.align) }),
-        barBtn('−', 'Less space above', () => blockChange(id, name, () => setBlockLook(id, name, 'space', Math.max(space - 1, -2))), { disabled: space <= -2 }),
-        barBtn('+', 'More space above', () => blockChange(id, name, () => setBlockLook(id, name, 'space', Math.min(space + 1, 4))), { disabled: space >= 4 }),
-        barBtn(WIDTH_ICON(look.width), `Width: ${look.width || 'as is'} (click for the next)`, () => blockChange(id, name, () => setBlockLook(id, name, 'width', next(WIDTHS, look.width))), { html: true, pressed: Boolean(look.width) }),
-        look.align || look.width || space ? barBtn('↺', `Put ${label} back as it was`, () => blockChange(id, name, () => {
-          ['align', 'space', 'width'].forEach((key) => setBlockLook(id, name, key, ''));
-        })) : null));
+      node.appendChild(h('span', { class: 'adm-part-tag', 'aria-hidden': 'true', text: BLOCK_LABELS[node.dataset.block] || node.dataset.block }));
     });
+    if (!selectedPart || selectedPart.id !== id) return;
+    const node = parts.find((n) => n.dataset.block === selectedPart.name);
+    if (!node) return;
+    node.classList.add('adm-part-selected');
+    const bar = partBar(id, selectedPart.name, node);
+    node.parentElement.appendChild(bar);
+    placePartBar();
+    // Its size settles after it's shown (it can wrap at first), and the part can grow: it follows both
+    if (partObserver) partObserver.disconnect();
+    if ('ResizeObserver' in window) {
+      partObserver = new ResizeObserver(() => placePartBar());
+      partObserver.observe(bar);
+      partObserver.observe(node);
+    }
   }
 
-  // Dragging a part by its ⠿: the line shows where it goes
-  function dragBlock(e, id, name, node) {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const others = [...node.parentElement.children].filter((c) => c.dataset.block && c !== node);
-    let target = null;
-    let before = false;
-    node.classList.add('is-dragging');
-    const clear = () => others.forEach((o) => o.classList.remove('drop-before', 'drop-after'));
-    const move = (ev) => {
-      const over = others.find((o) => {
-        const box = o.getBoundingClientRect();
-        return ev.clientY >= box.top && ev.clientY <= box.bottom;
-      });
-      if (!over) return;
-      clear();
-      target = over;
-      const box = over.getBoundingClientRect();
-      before = ev.clientY < box.top + box.height / 2;
-      over.classList.add(before ? 'drop-before' : 'drop-after');
-    };
-    const end = (ev) => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', end);
-      window.removeEventListener('pointercancel', end);
-      node.classList.remove('is-dragging');
-      clear();
-      if (!target || ev.type === 'pointercancel') return;
-      const to = target.dataset.block;
-      blockChange(id, name, () => {
-        const names = shownBlocks(id);
-        moveTo(names, names.indexOf(name), names.indexOf(to), before);
-        setBlockOrder(id, names);
-      });
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', end);
-    window.addEventListener('pointercancel', end);
+  let partObserver = null;
+
+  // Just above the selected part (its list of parts is the bar's frame)
+  function placePartBar() {
+    const bar = document.querySelector('.adm-part-bar');
+    const node = document.querySelector('.adm-part-selected');
+    if (!bar || !node) return;
+    bar.style.left = `${node.offsetLeft}px`;
+    bar.style.top = `${node.offsetTop - bar.offsetHeight - 10}px`;
+  }
+
+  window.addEventListener('resize', placePartBar);
+
+  function partBar(id, name, node) {
+    const names = shownBlocks(id);
+    const i = names.indexOf(name);
+    const label = BLOCK_LABELS[name] || name;
+    const look = blockLookOf(id, name);
+    const space = Number(look.space) || 0;
+    const set = (key, value) => blockChange(id, name, () => setBlockLook(id, name, key, value));
+    const group = (title, ...buttons) => h('span', { class: 'adm-part-group' }, h('span', { class: 'adm-part-label', text: title }), ...buttons);
+    // One alignment button: each press the next one (as it was, left, centre, right), its icon showing which
+    const ALIGN_NAMES = { '': 'as it was', left: 'left', center: 'centre', right: 'right' };
+    const align = look.align || '';
+    const nextAlign = ALIGNS[(ALIGNS.indexOf(align) + 1) % ALIGNS.length];
+    return h('div', { class: 'adm-part-bar', role: 'toolbar', 'aria-label': `${label}: arrange` },
+      h('span', { class: 'adm-part-name', text: label }),
+      names.length > 1 ? group('',
+        barBtn('↑', `Move the ${label.toLowerCase()} up`, () => moveBlockBy(id, name, -1), { disabled: i <= 0 }),
+        barBtn('↓', `Move the ${label.toLowerCase()} down`, () => moveBlockBy(id, name, 1), { disabled: i === names.length - 1 })) : null,
+      barBtn(ALIGN_ICON(align), `Alignment: ${ALIGN_NAMES[align]} (click for ${ALIGN_NAMES[nextAlign]})`, () => set('align', nextAlign), { html: true, pressed: Boolean(align) }),
+      group('Space',
+        barBtn('−', 'Less space above', () => set('space', Math.max(space - 1, -2)), { disabled: space <= -2 }),
+        h('span', { class: 'adm-part-value', text: space > 0 ? `+${space}` : String(space) }),
+        barBtn('+', 'More space above', () => set('space', Math.min(space + 1, 4)), { disabled: space >= 4 })),
+      group('Width', ...[['', 'Full'], ['medium', 'Medium'], ['narrow', 'Narrow']].map(([w, text]) => barBtn(text, `Width: ${text.toLowerCase()}`,
+        () => set('width', w), { pressed: (look.width || '') === w }))),
+      look.align || look.width || space ? barBtn('↺ Reset', 'Put this part back as it was', () => blockChange(id, name, () => {
+        ['align', 'space', 'width'].forEach((key) => setBlockLook(id, name, key, ''));
+      })) : null,
+      barBtn('✕', 'Close', () => {
+        selectedPart = null;
+        decorateBlocks();
+      }));
   }
 
   // Layouts from the section bar: ▦ opens the same little drawings as in the panel
@@ -1027,12 +1038,12 @@
   // ---------- Section bars ----------
   function sectionBar(id) {
     const c = state.draft;
-    const order = c.sections.order;
+    const order = pageOrder();
     const at = order.indexOf(id);
-    const fixed = at < 0; // the top section and the footer stay where they are
-    const builtin = window.SiteSections.builtin.includes(id);
+    const fixed = at < 0; // the footer stays last
+    const builtin = window.SiteSections.builtin.includes(id) || id === 'hero'; // can't be deleted or duplicated
     const hidden = Boolean(c.hidden[id]);
-    const kind = fixed ? id : kindOf(id);
+    const kind = id === 'hero' || fixed ? id : kindOf(id);
     const label = id === 'hero' ? 'Top section' : id === 'footer' ? 'Footer' : sectionLabel(id);
     const change = (fn) => {
       fn();
@@ -1052,9 +1063,9 @@
         if (hidden) delete c.hidden[id];
         else c.hidden[id] = true;
       }), { html: true, pressed: !hidden }),
-      fixed ? null : layoutButton(id),
+      fixed || id === 'hero' ? null : layoutButton(id),
       fixed || builtin ? null : barBtn('⧉', 'Duplicate section', () => duplicateSection(id)),
-      fixed ? null : barBtn('✕', builtin ? 'Remove from the page' : 'Delete section', () => removeSection(id), { danger: true }),
+      fixed || id === 'hero' ? null : barBtn('✕', builtin ? 'Remove from the page' : 'Delete section', () => removeSection(id), { danger: true }),
       barBtn('⚙', 'Settings: open it in the panel', () => selectSection(id, { reveal: true })));
   }
 
@@ -1284,6 +1295,7 @@
     scheduleHistory();
     syncPhoneSoon();
     showTypingHint();
+    placePartBar();
   }
 
   function onEditKey(e) {
@@ -1369,6 +1381,8 @@
   document.addEventListener('click', (e) => {
     if (!editingPage() || !e.target.closest) return;
     if (e.target.closest(`.adm-root, .adm-edge, .adm-phone, .modal-overlay, .adm-typing-hint, ${CHROME}`)) return;
+    const part = e.target.closest('[data-blocks] > [data-block]');
+    selectedPart = part ? { id: sectionOf(part), name: part.dataset.block } : null;
     const node = e.target.closest('[data-field]');
     if (node) {
       e.preventDefault();
@@ -1384,6 +1398,7 @@
     if (!e.target.closest) return;
     if (editing && !editing.node.contains(e.target) && !e.target.closest('.adm-root, .adm-edge')) stopEditing();
     if (!e.target.closest('.adm-insert, .adm-bar-pop')) document.querySelectorAll('.adm-insert-menu').forEach((menu) => { menu.hidden = true; });
+    if (!e.target.closest('.adm-more-wrap')) document.querySelectorAll('.adm-menu').forEach((menu) => { menu.hidden = true; });
   }, true);
 
   // ---------- Page and panel follow each other ----------
@@ -1458,6 +1473,7 @@
     let row = null;
     state.tab = 'page';
     state.allProjects = false;
+    state.rowTab = 'content';
     if (section === 'links') state.tab = 'site';
     else if (section === 'intros') row = index;
     else if (section === 'work') { row = gridForProject(Number(index)); state.openItem = Number(index); }
@@ -1519,29 +1535,22 @@
     root.appendChild(screen);
     ['keydown', 'pointerdown', 'input'].forEach((type) => root.addEventListener(type, resetIdle));
     root.addEventListener('pointerdown', startDrag);
-    ['pointerdown', 'focusin'].forEach((type) => root.addEventListener(type, (e) => { panelTarget = e.target; }));
+    // Also clicks without a pointer (Enter on a button): noted before the click redraws the panel
+    ['pointerdown', 'focusin', 'click'].forEach((type) => root.addEventListener(type, (e) => { panelTarget = e.target; }, true));
     // Shown on the right edge while the panel is minimised; the dot means unsaved changes
     edgeTab = h('button', { class: 'adm-edge', type: 'button', hidden: true, 'aria-label': 'Show admin panel', onclick: restore },
       h('span', { text: 'Admin' }),
       h('span', { class: 'adm-edge-dot', hidden: true }));
     document.body.append(root, edgeTab);
     // A detached window keeps the size it's resized to
-    if ('ResizeObserver' in window) {
-      new ResizeObserver(() => {
-        if (windowState.mode !== 'floating' || root.hidden || isMinimised()) return;
-        windowState.w = root.offsetWidth;
-        windowState.h = root.offsetHeight;
-        saveWindowState();
-      }).observe(root);
-    }
     applyWindowMode();
   }
 
-  // ---------- Window mode: docked on the right, detached (drag and resize), or full screen ----------
+  // ---------- Window mode: docked on the right or the left, detached (drag and resize), or full screen ----------
   // Remembered in this browser only.
   const WINDOW_KEY = 'am-admin-window';
   const windowState = (() => {
-    const fallback = { mode: 'docked', x: null, y: 40, w: 480, h: Math.round(window.innerHeight * 0.8) };
+    const fallback = { mode: 'docked', side: 'right', dockW: 460, x: null, y: 40, w: 480, h: Math.round(window.innerHeight * 0.8) };
     try { return { ...fallback, ...JSON.parse(localStorage.getItem(WINDOW_KEY) || '{}') }; } catch { return fallback; }
   })();
 
@@ -1564,22 +1573,146 @@
     root.style.top = `${windowState.y}px`;
   }
 
+  // Docked on the left: the panel, its Admin tab and the page's editing bars all swap sides
+  const dockedLeft = () => windowState.side === 'left' && windowState.mode === 'docked';
+
+  // Docked, the page makes room: it's narrower, next to the panel, instead of under it. Drag the panel's
+  // inner edge to change how wide it is.
+  const DOCK_MIN = 340;
+  const dockWidth = () => Math.round(Math.min(Math.max(Number(windowState.dockW) || 460, DOCK_MIN), Math.max(window.innerWidth * 0.7, DOCK_MIN)));
+
+  function updateRoom() {
+    if (!root) return;
+    const html = document.documentElement;
+    const on = !root.hidden && !isMinimised() && windowState.mode === 'docked';
+    // The page reflows to its new width: keep what's being looked at where it is
+    const anchor = pageAnchor();
+    html.classList.toggle('adm-docked', on);
+    html.classList.toggle('adm-docked-left', on && windowState.side === 'left');
+    html.style.setProperty('--adm-w', `${dockWidth()}px`);
+    restorePageAnchor(anchor);
+  }
+
+  // ---------- Resizing: every edge and corner of the window; docked, its inner edge ----------
+  const EDGES = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
+  const GRIP = 10;
+  let handles = null;
+
+  function placeHandles() {
+    if (!root) return;
+    if (!handles) {
+      handles = EDGES.map((dir) => {
+        const handle = h('div', { class: `adm-rz adm-rz-${dir}`, 'aria-hidden': 'true', hidden: true });
+        handle.addEventListener('pointerdown', (e) => startResize(e, dir));
+        document.body.appendChild(handle);
+        return handle;
+      });
+    }
+    const visible = !root.hidden && !isMinimised();
+    const box = root.getBoundingClientRect();
+    const inner = windowState.side === 'left' ? 'e' : 'w';
+    handles.forEach((handle, i) => {
+      const dir = EDGES[i];
+      const on = visible && (windowState.mode === 'floating' || (windowState.mode === 'docked' && dir === inner));
+      handle.hidden = !on;
+      if (!on) return;
+      const across = dir.length === 2 ? GRIP * 2 : GRIP;
+      const x = dir.includes('w') ? box.left - across / 2 : dir.includes('e') ? box.right - across / 2 : box.left + GRIP;
+      const y = dir.includes('n') ? box.top - across / 2 : dir.includes('s') ? box.bottom - across / 2 : box.top + (windowState.mode === 'docked' ? 0 : GRIP);
+      const width = dir === 'n' || dir === 's' ? box.width - GRIP * 2 : across;
+      const height = dir === 'e' || dir === 'w' ? box.height - (windowState.mode === 'docked' ? 0 : GRIP * 2) : across;
+      Object.assign(handle.style, { left: `${x}px`, top: `${y}px`, width: `${width}px`, height: `${height}px` });
+    });
+  }
+
+  function startResize(e, dir) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const start = { x: e.clientX, y: e.clientY, box: root.getBoundingClientRect() };
+    root.classList.add('is-dragging');
+    document.documentElement.classList.add('adm-resizing');
+    const move = (ev) => {
+      const dx = ev.clientX - start.x;
+      const dy = ev.clientY - start.y;
+      if (windowState.mode === 'docked') {
+        windowState.dockW = windowState.side === 'left' ? start.box.width + dx : start.box.width - dx;
+        root.style.width = `${dockWidth()}px`;
+        document.documentElement.style.setProperty('--adm-w', `${dockWidth()}px`);
+      } else {
+        let { left, top, width, height } = start.box;
+        if (dir.includes('e')) width += dx;
+        if (dir.includes('s')) height += dy;
+        if (dir.includes('w')) { width -= dx; left += dx; }
+        if (dir.includes('n')) { height -= dy; top += dy; }
+        // Not smaller than a usable window; a left or top edge stops instead of pushing the window
+        if (width < 320) { if (dir.includes('w')) left -= 320 - width; width = 320; }
+        if (height < 240) { if (dir.includes('n')) top -= 240 - height; height = 240; }
+        width = Math.min(width, window.innerWidth);
+        height = Math.min(height, window.innerHeight);
+        windowState.w = Math.round(width);
+        windowState.h = Math.round(height);
+        root.style.width = `${windowState.w}px`;
+        root.style.height = `${windowState.h}px`;
+        placeFloating(left, top);
+      }
+      placeHandles();
+    };
+    const end = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+      root.classList.remove('is-dragging');
+      document.documentElement.classList.remove('adm-resizing');
+      saveWindowState();
+      updateRoom();
+      placeHandles();
+      placePhone();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+  }
+
+  function switchSide() {
+    windowState.side = windowState.side === 'left' ? 'right' : 'left';
+    windowState.mode = 'docked';
+    saveWindowState();
+    applyWindowMode();
+  }
+
   function applyWindowMode() {
     if (!root) return;
     const { mode } = windowState;
     root.classList.toggle('adm-root--floating', mode === 'floating');
     root.classList.toggle('adm-root--full', mode === 'full');
+    root.classList.toggle('adm-root--left', dockedLeft());
+    if (edgeTab) edgeTab.classList.toggle('is-left', windowState.side === 'left');
+    if (state.draft) document.documentElement.classList.toggle('adm-dock-left', dockedLeft());
     root.style.cssText = '';
+    if (mode === 'docked') root.style.width = `${dockWidth()}px`;
     if (mode === 'floating') {
       root.style.width = `${Math.min(Math.max(windowState.w, 320), window.innerWidth)}px`;
       root.style.height = `${Math.min(Math.max(windowState.h, 240), window.innerHeight)}px`;
-      placeFloating(windowState.x == null ? window.innerWidth - windowState.w - 40 : windowState.x, windowState.y);
+      placeFloating(windowState.x == null ? (windowState.side === 'left' ? 40 : window.innerWidth - windowState.w - 40) : windowState.x, windowState.y);
     }
+    updateRoom();
     labelWindowButtons();
+    placeHandles();
   }
 
   function labelWindowButtons() {
     const { mode } = windowState;
+    const label = (btn, sign, title) => {
+      btn.title = title;
+      btn.setAttribute('aria-label', title);
+      if (btn.classList.contains('adm-menu-item')) {
+        btn.textContent = '';
+        btn.append(h('span', { class: 'adm-menu-sign', text: sign }), h('span', { text: title }));
+      } else {
+        btn.textContent = sign;
+      }
+    };
+    root.querySelectorAll('.adm-menu-lock').forEach((btn) => label(btn, '\u{1F512}', 'Lock the panel'));
     root.querySelectorAll('.adm-win-phone').forEach((btn) => {
       btn.innerHTML = PHONE_ICON;
       btn.title = phone ? 'Close the phone preview' : 'Phone preview: see the page at phone width';
@@ -1589,15 +1722,14 @@
     placePhone();
     root.querySelectorAll('.adm-win-float').forEach((btn) => {
       const on = mode === 'floating';
-      btn.textContent = on ? '⇥' : '⧉';
-      btn.title = on ? 'Dock to the side' : 'Detach into a window you can move and resize';
-      btn.setAttribute('aria-label', btn.title);
+      label(btn, on ? '⇥' : '⧉', on ? 'Dock to the side' : 'Detach into a window you can move and resize');
     });
     root.querySelectorAll('.adm-win-full').forEach((btn) => {
       const on = mode === 'full';
-      btn.textContent = on ? '⤡' : '⤢';
-      btn.title = on ? 'Exit full screen' : 'Full screen';
-      btn.setAttribute('aria-label', btn.title);
+      label(btn, on ? '⤡' : '⤢', on ? 'Exit full screen' : 'Full screen');
+    });
+    root.querySelectorAll('.adm-win-side').forEach((btn) => {
+      label(btn, '\u21C6', dockedLeft() ? 'Dock on the right side' : 'Dock on the left side');
     });
   }
 
@@ -1607,9 +1739,39 @@
     return btn;
   }
 
+  // The panel's less used controls, behind "⋯": which side, a window or full screen, and Lock
+  function moreMenu() {
+    const item = (cls, onclick) => h('button', {
+      class: `adm-menu-item ${cls}`,
+      type: 'button',
+      role: 'menuitem',
+      onclick: () => {
+        menu.hidden = true;
+        onclick();
+      },
+    });
+    const menu = h('div', { class: 'adm-menu', role: 'menu', hidden: true },
+      item('adm-win-side', switchSide),
+      item('adm-win-float', () => setWindowMode('floating')),
+      item('adm-win-full', () => setWindowMode('full')),
+      item('adm-menu-lock', () => { state.token = null; showUnlock('Locked. Unsaved changes are kept.'); }));
+    return h('div', { class: 'adm-more-wrap' },
+      h('button', {
+        class: 'adm-close adm-more-btn',
+        type: 'button',
+        text: '\u22EF',
+        title: 'More: side, window, full screen, lock',
+        'aria-label': 'More',
+        'aria-haspopup': 'menu',
+        onclick: () => { menu.hidden = !menu.hidden; },
+      }),
+      menu);
+  }
+
   function windowButtons() {
     return [
       h('button', { class: 'adm-close adm-win-phone', type: 'button', onclick: togglePhone }),
+      h('button', { class: 'adm-close adm-win-side', type: 'button', onclick: switchSide }),
       h('button', { class: 'adm-close adm-win-float', type: 'button', onclick: () => setWindowMode('floating') }),
       h('button', { class: 'adm-close adm-win-full', type: 'button', onclick: () => setWindowMode('full') }),
     ];
@@ -1624,7 +1786,10 @@
     const dx = e.clientX - box.left;
     const dy = e.clientY - box.top;
     root.classList.add('is-dragging');
-    const move = (ev) => placeFloating(ev.clientX - dx, ev.clientY - dy);
+    const move = (ev) => {
+      placeFloating(ev.clientX - dx, ev.clientY - dy);
+      placeHandles();
+    };
     const end = () => {
       root.classList.remove('is-dragging');
       window.removeEventListener('pointermove', move);
@@ -1638,11 +1803,13 @@
   }
 
   // A smaller browser window shouldn't leave the detached panel off screen
-  window.addEventListener('resize', () => { if (root && windowState.mode === 'floating') applyWindowMode(); });
+  window.addEventListener('resize', () => { if (root && !root.hidden) applyWindowMode(); });
 
   // Minimising keeps the token, draft and unsaved changes; it only slides the panel out of the way
   function minimise() {
     root.classList.add('is-min');
+    updateRoom();
+    placeHandles();
     setTimeout(placePhone);
     root.inert = true;
     edgeTab.hidden = false;
@@ -1653,7 +1820,9 @@
   function restore() {
     if (previewing) { setPreviewing(false); return; }
     root.classList.remove('is-min');
+    updateRoom();
     setTimeout(placePhone);
+    setTimeout(placeHandles, 260); // after it has slid back in
     root.inert = false;
     edgeTab.hidden = true;
   }
@@ -1681,6 +1850,8 @@
   function open() {
     ensureRoot();
     root.hidden = false;
+    updateRoom();
+    placeHandles();
     if (!window.crypto || !crypto.subtle) {
       setScreen(h('div', { class: 'adm-card' },
         h('h2', { text: 'Admin unavailable' }),
@@ -1711,6 +1882,8 @@
     clearTimeout(idleTimer);
     restore();
     root.hidden = true;
+    updateRoom();
+    placeHandles();
   }
 
   function toggle() {
@@ -1762,7 +1935,16 @@
           saveStore(state.store);
           state.token = token.value.trim();
           token.value = pass.value = pass2.value = '';
-          await afterUnlock();
+          submit.textContent = 'Making a recovery code…';
+          const fresh = await makeRecoveryCode();
+          showRecoveryCode(fresh, async () => {
+            try {
+              await afterUnlock();
+            } catch (error) {
+              state.token = null;
+              showUnlock(error.message);
+            }
+          });
         } catch (error) {
           err.textContent = error.message;
           submit.disabled = false;
@@ -1782,6 +1964,161 @@
     err,
     submit);
     setScreen(form);
+  }
+
+  // ---------- Recovery code ----------
+  // A second key to this browser's encrypted token, for a forgotten password. It's shown once, when it's
+  // made (at setup, or from the Site tab); with it, the unlock screen lets you choose a new password.
+  // Like the password, it only works in the browser that keeps the encrypted token, and it's never stored
+  // itself: only a second encrypted copy of the token is (store.recovery).
+  const CODE_LETTERS = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'; // no I, L, O or U: easy to read back
+
+  function newRecoveryCode() {
+    const bytes = crypto.getRandomValues(new Uint8Array(24));
+    return [...bytes].map((b) => CODE_LETTERS[b & 31]).join('').match(/.{4}/g).join('-'); // 120 random bits
+  }
+
+  // Typed back: any case, with or without dashes or spaces, O for 0 and I or L for 1
+  const cleanCode = (text) => String(text || '').toUpperCase().replace(/[^0-9A-Z]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
+
+  async function makeRecoveryCode() {
+    const fresh = newRecoveryCode();
+    state.store.recovery = await encryptToken(state.token, cleanCode(fresh));
+    saveStore(state.store);
+    return fresh;
+  }
+
+  function showRecoveryCode(fresh, next) {
+    const done = h('button', { class: 'adm-btn adm-btn-primary', type: 'button', text: 'Continue', disabled: true, onclick: next });
+    const copied = h('span', { class: 'adm-hint' });
+    setScreen(h('div', { class: 'adm-card' },
+      h('h2', { text: 'Your recovery code' }),
+      h('p', { class: 'adm-help', text: 'If you ever forget your password, this code lets you choose a new one on this computer. Write it down or keep it in a password manager: it’s shown only now.' }),
+      h('p', { class: 'adm-recovery-code', text: fresh }),
+      h('div', { class: 'adm-inline' },
+        h('button', {
+          class: 'adm-btn',
+          type: 'button',
+          text: 'Copy',
+          onclick: async () => {
+            try {
+              await navigator.clipboard.writeText(fresh);
+              copied.textContent = 'Copied.';
+            } catch {
+              copied.textContent = 'Couldn’t copy: select the code and copy it by hand.';
+            }
+          },
+        }),
+        copied),
+      h('label', { class: 'adm-check' },
+        h('input', { type: 'checkbox', onchange: (e) => { done.disabled = !e.target.checked; } }),
+        h('span', { text: 'I’ve kept it somewhere safe' })),
+      h('p', { class: 'adm-hint', text: 'Anyone with this code and this computer can open the panel, the same as with your password. Keep it away from the computer itself, e.g. on paper or in your phone’s password manager.' }),
+      h('div', { class: 'adm-actions' }, h('span'), done)));
+  }
+
+  // Forgot the password: the recovery code and a new password
+  function showRecover() {
+    const back = h('button', { class: 'adm-link', type: 'button', text: 'Back', onclick: () => showUnlock() });
+    if (!state.store.recovery) {
+      setScreen(h('div', { class: 'adm-card' },
+        h('h2', { text: 'Forgot your password?' }),
+        h('p', { text: 'This computer has no recovery code, so the panel has to be set up again here. Nothing on your site is lost: it’s all on GitHub.' }),
+        h('ol', { class: 'adm-steps' },
+          h('li', null, 'Make a new ', h('a', { href: 'https://github.com/settings/personal-access-tokens/new', target: '_blank', rel: 'noopener', text: 'GitHub token' }), ' (only this repository, “Contents: Read and write”).'),
+          h('li', { text: 'Press “Set up again” below, paste the token and choose a new password.' }),
+          h('li', null, 'Delete the old token on ', h('a', { href: 'https://github.com/settings/personal-access-tokens', target: '_blank', rel: 'noopener', text: 'GitHub' }), ', since nothing can unlock it any more.')),
+        h('p', { class: 'adm-hint', text: 'Afterwards, make a recovery code in the Site tab, so next time a code is enough.' }),
+        h('div', { class: 'adm-actions' },
+          back,
+          h('button', {
+            class: 'adm-btn adm-btn-primary',
+            type: 'button',
+            text: 'Set up again',
+            onclick: () => {
+              const repo = state.store.repo;
+              clearStore();
+              state.store = { repo };
+              showSetup();
+            },
+          }))));
+      return;
+    }
+    const err = errorLine();
+    const codeInput = h('input', { type: 'text', autocomplete: 'off', spellcheck: false, required: true, placeholder: 'XXXX-XXXX-XXXX-XXXX-XXXX-XXXX', class: 'adm-code-input' });
+    const pass = h('input', { type: 'password', autocomplete: 'new-password', required: true, minLength: 10 });
+    const pass2 = h('input', { type: 'password', autocomplete: 'new-password', required: true });
+    const submit = h('button', { class: 'adm-btn adm-btn-primary', type: 'submit', text: 'Set the new password' });
+    setScreen(h('form', {
+      class: 'adm-card',
+      onsubmit: async (e) => {
+        e.preventDefault();
+        err.textContent = '';
+        const wait = state.cooldownUntil - Date.now();
+        if (wait > 0) { err.textContent = `Too many wrong attempts. Try again in ${Math.ceil(wait / 1000)} s.`; return; }
+        if (pass.value.length < 10) { err.textContent = 'Use a password of at least 10 characters.'; return; }
+        if (pass.value !== pass2.value) { err.textContent = 'The passwords do not match.'; return; }
+        submit.disabled = true;
+        submit.textContent = 'Checking the code…';
+        let token;
+        try {
+          token = await decryptToken(state.store.recovery, cleanCode(codeInput.value));
+        } catch {
+          state.failedAttempts += 1;
+          if (state.failedAttempts >= MAX_ATTEMPTS) {
+            state.failedAttempts = 0;
+            state.cooldownUntil = Date.now() + ATTEMPT_COOLDOWN_MS;
+          }
+          err.textContent = 'That recovery code doesn’t fit this computer.';
+          submit.disabled = false;
+          submit.textContent = 'Set the new password';
+          return;
+        }
+        state.failedAttempts = 0;
+        submit.textContent = 'Encrypting…';
+        state.store.secret = await encryptToken(token, pass.value);
+        saveStore(state.store);
+        state.token = token;
+        codeInput.value = pass.value = pass2.value = '';
+        state.note = 'New password set. Your recovery code still works.';
+        try {
+          await afterUnlock();
+        } catch (error) {
+          state.token = null;
+          err.textContent = error.message;
+          submit.disabled = false;
+          submit.textContent = 'Set the new password';
+        }
+      },
+    },
+    h('div', { class: 'adm-card-head' }, h('h2', { text: 'Forgot your password?' }), h('div', { class: 'adm-top-actions' }, closeButton())),
+    h('p', { class: 'adm-help', text: 'Type the recovery code you kept when you set up the panel (or made one in the Site tab), then choose a new password.' }),
+    field('Recovery code', codeInput),
+    field('New password (10+ characters)', pass),
+    field('Confirm the new password', pass2),
+    err,
+    h('div', { class: 'adm-actions' }, back, submit)));
+  }
+
+  // Site tab: whether this computer has a recovery code, and making a new one
+  function recoveryBox() {
+    const has = Boolean(state.store && state.store.recovery);
+    return h('div', { class: 'adm-form adm-group-box', 'data-adm-section': 'recovery' },
+      h('h3', { class: 'adm-group', text: 'Recovery code' }),
+      h('p', { class: has ? 'adm-hint' : 'adm-error', text: has
+        ? 'This computer has a recovery code: with it, a forgotten password can be replaced (“Forgot your password?” when unlocking).'
+        : 'This computer has no recovery code yet. Make one, so a forgotten password can be replaced without setting everything up again.' }),
+      h('button', {
+        class: 'adm-btn',
+        type: 'button',
+        text: has ? 'Make a new recovery code' : 'Make a recovery code',
+        onclick: async () => {
+          if (has && !confirm('Make a new recovery code? The old one stops working.')) return;
+          const fresh = await makeRecoveryCode();
+          showRecoveryCode(fresh, () => showEditor());
+        },
+      }),
+      h('p', { class: 'adm-hint', text: 'Each computer has its own; on another computer, make one there too.' }));
   }
 
   // ---------- Unlock ----------
@@ -1831,6 +2168,7 @@
     err,
     h('div', { class: 'adm-actions' },
       submit,
+      h('button', { class: 'adm-link', type: 'button', text: 'Forgot your password?', onclick: showRecover }),
       h('button', {
         class: 'adm-link',
         type: 'button',
@@ -1848,6 +2186,8 @@
   async function afterUnlock() {
     resetIdle();
     checkUpdatesInBackground();
+    // Set up before recovery codes existed: say where to make one
+    if (!state.store.recovery && !state.note) state.note = 'Tip: make a recovery code (Site tab) in case you forget your password.';
     if (!state.draft) {
       await loadRemote();
       if (isCopy()) { showCopyNotice(); return; }
@@ -1933,21 +2273,13 @@
       help: 'A starting point for the colours. Every colour can be fine-tuned later in the Theme tab.',
       body: (step) => {
         const theme = state.draft.theme;
-        const T = window.SiteTheme;
-        const swatch = (color) => h('span', { class: 'adm-swatch', style: `background:${color}` });
         return h('div', { class: 'adm-form' },
-          h('div', { class: 'adm-presets' }, Object.entries(T.presets).map(([key, preset]) => h('button', {
-            class: `adm-preset${theme.preset === key ? ' is-active' : ''}`,
-            type: 'button',
-            'aria-pressed': String(theme.preset === key),
-            onclick: () => { theme.preset = key; theme.colors = {}; changed(); showWizard(step); },
-          }, h('span', { class: 'adm-swatches' }, swatch(preset.bg), swatch(preset.surface), swatch(preset.accent), swatch(preset.accent2)), h('span', { text: preset.name })))),
+          // The same chips as the Theme tab, with any schemes saved there (or that came with the site)
+          schemeChips(theme, (scheme) => { useScheme(theme, scheme); changed(); showWizard(step); }),
           h('div', { class: 'adm-row2' },
-            field('Text font', h('select', { onchange: (e) => { theme.font = e.target.value; changed(); } },
-              Object.keys(T.fonts).map((f) => h('option', { value: f, text: f, selected: theme.font === f })))),
-            field('Heading font', h('select', { onchange: (e) => { theme.headingFont = e.target.value; changed(); } },
-              h('option', { value: '', text: 'Same as the text', selected: !theme.headingFont }),
-              Object.keys(T.fonts).map((f) => h('option', { value: f, text: f, selected: theme.headingFont === f }))))));
+            field('Text font', h('select', { onchange: (e) => { theme.font = e.target.value; changed(); } }, fontChoices(theme, theme.font))),
+            field('Heading font', h('select', { onchange: (e) => { theme.headingFont = e.target.value; changed(); } }, fontChoices(theme, theme.headingFont, 'Same as the text')))),
+          h('p', { class: 'adm-hint', text: 'Your own font files and colour schemes can be added in the Theme tab; they show up here too.' }));
       },
     },
     {
@@ -2013,7 +2345,9 @@
       body: (step) => {
         const L = state.draft.languages;
         const names = window.LANGUAGE_NAMES || {};
-        const common = [...new Set([L.main, 'en', 'nl', 'fr', 'de', 'es'])];
+        // Languages that come with interface text first, then any other that was picked
+        const withText = Object.keys(names).filter((code) => Object.values(window.SITE_UI_TEXT || {}).some((entry) => entry[code]));
+        const common = [...new Set([L.main, ...withText, ...L.available])];
         return h('div', { class: 'adm-form' },
           field('Main language', h('select', {
             onchange: (e) => {
@@ -2034,7 +2368,16 @@
               },
             }),
             h('span', { text: names[code] })))),
-          h('p', { class: 'adm-hint', text: 'Only the main language? Then there’s no language switch. More languages are in the Site tab.' }));
+          field('Another language', h('select', {
+            onchange: (e) => {
+              if (!e.target.value) return;
+              L.available = [...new Set([...L.available, e.target.value])];
+              renderPage(state.draft);
+              showWizard(step);
+            },
+          }, h('option', { value: '', text: 'Add a language…' }),
+          Object.entries(names).filter(([code]) => !common.includes(code)).map(([code, label]) => h('option', { value: code, text: label })))),
+          h('p', { class: 'adm-hint', text: 'Only the main language? Then there’s no language switch. Languages without built-in interface text get it typed in the Site tab (buttons, menu, form labels).' }));
       },
     },
     {
@@ -2428,9 +2771,9 @@
           h('button', { class: 'adm-close adm-undo', type: 'button', text: '↶', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo', onclick: undo }),
           h('button', { class: 'adm-close adm-redo', type: 'button', text: '↷', title: 'Redo (Ctrl+Shift+Z)', 'aria-label': 'Redo', onclick: redo }),
           saveBtn,
-          h('button', { class: 'adm-btn', type: 'button', text: 'Lock', onclick: () => { state.token = null; showUnlock('Locked. Unsaved changes are kept.'); } }),
           previewButton(),
-          windowButtons(),
+          h('button', { class: 'adm-close adm-win-phone', type: 'button', onclick: togglePhone }),
+          moreMenu(),
           h('button', { class: 'adm-close', type: 'button', 'aria-label': 'Minimise admin', title: 'Minimise', text: '–', onclick: minimise }),
           closeButton())),
       statusEl,
@@ -2448,6 +2791,8 @@
   }
 
   function rerenderTab() {
+    // A change from the panel ends typing on the page first (the page isn't redrawn while it's typed in)
+    if (editing) stopEditing();
     const body = screen.querySelector('.adm-body');
     const anchor = panelAnchor();
     if (body) renderTab(body);
@@ -2460,6 +2805,30 @@
     body.innerHTML = '';
     const views = { page: pageTab, site: siteTab, theme: themeTab };
     body.appendChild(views[state.tab]());
+    compactHelp(body);
+  }
+
+  // Help texts longer than a sentence show only their first sentence, with "more" for the rest
+  function compactHelp(container) {
+    container.querySelectorAll('.adm-hint, .adm-help').forEach((node) => {
+      if (node.dataset.compact || node.children.length) return;
+      const full = node.textContent.trim();
+      const parts = /^(.{24,}?[.!?])\s+(?=[A-Z\u201C"(])([\s\S]+)$/.exec(full);
+      if (!parts || full.length < 100) return;
+      node.dataset.compact = '1';
+      node.textContent = `${parts[1]} `;
+      node.appendChild(h('button', {
+        class: 'adm-hint-more',
+        type: 'button',
+        text: 'more',
+        title: full,
+        onclick: (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          node.textContent = full;
+        },
+      }));
+    });
   }
 
   function updateStatus(message, kind) {
@@ -2785,6 +3154,7 @@
         h('p', { class: 'adm-hint', text: 'Where this site lives. Filled in for you when setting up the admin panel on a new computer.' }),
         h('div', { class: 'adm-row3' }, field('Owner', text(site.repo, 'owner')), field('Repository', text(site.repo, 'repo')), field('Branch', text(site.repo, 'branch')))),
       h('div', { class: 'adm-form adm-group-box' }, linksBox()),
+      recoveryBox(),
       updatesBox(),
       h('div', { class: 'adm-form adm-group-box', 'data-adm-section': 'analytics' },
         h('h3', { class: 'adm-group', text: 'Analytics' }),
@@ -2925,18 +3295,21 @@
   }
 
   // ---------- Theme tab ----------
-  const COLOR_FIELDS = [
-    ['bg', 'Page background'],
-    ['bgAlt', 'Second background (About, Work)'],
-    ['surface', 'Cards and form fields'],
-    ['border', 'Lines and borders'],
-    ['text', 'Text'],
-    ['textDim', 'Soft text'],
-    ['accent', 'Main accent (buttons, links)'],
-    ['accent2', 'Second accent (highlights, lines)'],
-    ['onAccent', 'Text on accent buttons'],
-    ['heroBg', 'Top section background'],
-    ['heroText', 'Top section text'],
+  // [key, short label, what it colours]: the first four are shown, the rest fold under "More colours"
+  const MAIN_COLORS = [
+    ['bg', 'Background', 'Page background'],
+    ['text', 'Text', 'Text'],
+    ['accent', 'Accent', 'Buttons and links'],
+    ['accent2', 'Accent 2', 'Highlights and lines'],
+  ];
+  const MORE_COLORS = [
+    ['bgAlt', 'Sections', 'Second background (About, Work)'],
+    ['surface', 'Cards', 'Cards and form fields'],
+    ['border', 'Lines', 'Lines and borders'],
+    ['textDim', 'Soft text', 'Dates, captions and other quieter text'],
+    ['onAccent', 'On buttons', 'Text on accent buttons'],
+    ['heroBg', 'Top background', 'Top section background'],
+    ['heroText', 'Top text', 'Top section text'],
   ];
   // Colours that change when switching between light and dark (the accents stay)
   const NEUTRAL_COLORS = ['bg', 'bgAlt', 'surface', 'border', 'text', 'textDim', 'heroBg'];
@@ -2953,62 +3326,164 @@
     theme.colors.mode = mode;
   }
 
+  function fontChoices(theme, selected, emptyLabel) {
+    const ownFamilies = [...new Set(theme.customFonts.map((f) => f.name.trim()).filter(Boolean))];
+    return [
+      emptyLabel ? h('option', { value: '', text: emptyLabel, selected: !selected }) : null,
+      ownFamilies.length ? h('optgroup', { label: 'Your fonts' }, ownFamilies.map((f) => h('option', { value: f, text: f, selected: selected === f }))) : null,
+      h('optgroup', { label: 'Google Fonts' }, Object.keys(window.SiteTheme.fonts).map((f) => h('option', { value: f, text: f, selected: selected === f }))),
+    ];
+  }
+
   // ---------- Saved colour schemes ----------
   // theme.saved = [{ name, preset, colors }]: colour combinations kept to switch back to, stored with the
   // site's content so they're there on every computer
   const schemeKey = (scheme) => JSON.stringify({ preset: scheme.preset, colors: scheme.colors || {} });
   const currentScheme = (theme) => ({ preset: theme.preset, colors: { ...theme.colors } });
 
-  // Switching away from colours that are in no saved scheme loses them: say so first
-  function confirmColourSwitch(theme) {
-    const custom = Object.keys(theme.colors).filter((key) => key !== 'mode').length > 0;
-    const kept = theme.saved.some((scheme) => schemeKey(scheme) === schemeKey(currentScheme(theme)));
-    return !custom || kept || confirm('Switch colours? Your own colour changes aren\u2019t saved as a scheme yet, so they\u2019ll be replaced. (Cancel, then use \u201CSave current colours\u201D to keep them.)');
+  const hasOwnColours = (theme) => Object.keys(theme.colors).some((key) => key !== 'mode');
+  const isSaved = (theme, scheme) => theme.saved.some((s) => schemeKey(s) === schemeKey(scheme));
+
+  // Hand-made colours that aren't a saved scheme: picking another scheme keeps them here, as the
+  // "Your edits" chip, so they're one click away (until the panel is closed)
+  let looseEdits = null;
+  let namingScheme = false; // the "Save" chip is a name field
+
+  function useScheme(theme, scheme) {
+    const now = currentScheme(theme);
+    if (hasOwnColours(theme) && !isSaved(theme, now)) looseEdits = now;
+    theme.preset = scheme.preset;
+    theme.colors = { ...(scheme.colors || {}) };
+    window.SiteTheme.apply(theme);
   }
 
-  function colourSchemesBox(theme, swatch) {
+  function saveScheme(theme, label) {
     const saved = theme.saved;
-    const active = schemeKey(currentScheme(theme));
-    const name = h('input', { type: 'text', placeholder: 'Name, e.g. Summer', maxLength: 40 });
-    const saveCurrent = () => {
-      const label = name.value.trim() || `Scheme ${saved.length + 1}`;
-      const existing = saved.findIndex((scheme) => scheme.name.toLowerCase() === label.toLowerCase());
-      if (existing >= 0 && !confirm(`Replace the saved scheme \u201C${saved[existing].name}\u201D with the current colours?`)) return;
-      const scheme = { name: label, ...currentScheme(theme) };
-      if (existing >= 0) saved[existing] = scheme;
-      else saved.push(scheme);
-      rerenderTab();
+    const existing = saved.findIndex((scheme) => scheme.name.toLowerCase() === label.toLowerCase());
+    if (existing >= 0 && !confirm(`Replace the saved scheme \u201C${saved[existing].name}\u201D with the current colours?`)) return;
+    const scheme = { name: label, ...currentScheme(theme) };
+    if (existing >= 0) saved[existing] = scheme;
+    else saved.push(scheme);
+    looseEdits = null;
+  }
+
+  // Ready-made and saved schemes as one row of chips. Hovering one shows it on the page; a click keeps it.
+  // `manage`: saved ones can be deleted and the current colours saved (the Theme tab; the wizard only picks)
+  function schemeChips(theme, onPick, manage) {
+    const T = window.SiteTheme;
+    const now = currentScheme(theme);
+    const active = schemeKey(now);
+    const custom = hasOwnColours(theme) && !isSaved(theme, now);
+    const edits = custom ? now : looseEdits && schemeKey(looseEdits) !== active ? looseEdits : null;
+    const chip = (scheme, name, title, remove) => {
+      const c = T.colors(scheme);
+      const isActive = schemeKey(scheme) === active;
+      return h('span', { class: `adm-chip${isActive ? ' is-active' : ''}` },
+        h('button', {
+          class: 'adm-chip-pick',
+          type: 'button',
+          title,
+          'aria-pressed': String(isActive),
+          onmouseenter: () => { if (!isActive) T.apply({ ...theme, preset: scheme.preset, colors: { ...(scheme.colors || {}) } }); },
+          onmouseleave: () => T.apply(state.draft.theme),
+          onclick: () => { if (!isActive) onPick(scheme); },
+        },
+        h('span', { class: 'adm-chip-dot', style: `background:conic-gradient(${c.accent} 0 25%, ${c.accent2} 0 50%, ${c.bg} 0)` }),
+        h('span', { text: name })),
+        remove ? h('button', { class: 'adm-chip-x', type: 'button', text: '\u2715', title: `Delete \u201C${name}\u201D`, 'aria-label': `Delete \u201C${name}\u201D`, onclick: remove }) : null);
     };
-    name.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveCurrent(); } });
-    return h('div', { class: 'adm-form adm-group-box' },
-      h('h3', { class: 'adm-group', text: 'Your colour schemes' }),
-      saved.length
-        ? h('div', { class: 'adm-presets' }, saved.map((scheme, i) => {
-          const colors = window.SiteTheme.colors(scheme);
-          const isActive = schemeKey(scheme) === active;
-          return h('div', { class: 'adm-scheme' },
-            h('button', {
-              class: `adm-preset${isActive ? ' is-active' : ''}`,
-              type: 'button',
-              'aria-pressed': String(isActive),
-              title: 'Use these colours',
-              onclick: () => {
-                if (isActive || !confirmColourSwitch(theme)) return;
-                theme.preset = scheme.preset;
-                theme.colors = { ...scheme.colors };
-                rerenderTab();
-              },
-            }, h('span', { class: 'adm-swatches' }, swatch(colors.bg), swatch(colors.surface), swatch(colors.accent), swatch(colors.accent2)), h('span', { text: scheme.name })),
-            iconBtn('\u2715', `Delete \u201C${scheme.name}\u201D`, () => {
-              if (!confirm(`Delete the saved scheme \u201C${scheme.name}\u201D? The colours you\u2019re using now stay.`)) return;
-              saved.splice(i, 1);
-              rerenderTab();
-            }));
-        }))
-        : h('p', { class: 'adm-hint', text: 'Save the colours you have now to switch back to them later, or to try several looks. Saved schemes are kept with the site, on every computer.' }),
-      h('div', { class: 'adm-scheme-save' },
-        name,
-        h('button', { class: 'adm-btn', type: 'button', text: 'Save current colours', onclick: saveCurrent })));
+    let nameField = null;
+    if (manage && custom && namingScheme) {
+      const finish = (keep) => {
+        if (!namingScheme) return;
+        namingScheme = false;
+        const label = nameField.value.trim();
+        if (keep && label) saveScheme(theme, label);
+        rerenderTab();
+      };
+      nameField = h('input', {
+        class: 'adm-chip-name',
+        type: 'text',
+        placeholder: 'Name, then Enter',
+        maxLength: 40,
+        onkeydown: (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+          if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+        },
+        onblur: () => finish(true),
+      });
+    }
+    return h('div', { class: 'adm-chips' },
+      Object.entries(T.presets).map(([key, p]) => chip({ preset: key, colors: {} }, p.name.replace(/\s*\(.*\)$/, ''), p.name)),
+      theme.saved.map((scheme, i) => chip(scheme, scheme.name, 'Your saved scheme', manage ? () => {
+        if (!confirm(`Delete the saved scheme \u201C${scheme.name}\u201D? The colours you\u2019re using now stay.`)) return;
+        theme.saved.splice(i, 1);
+        rerenderTab();
+      } : null)),
+      edits ? chip(edits, 'Your edits', 'Colours you changed by hand (not saved as a scheme)') : null,
+      nameField || (manage && custom ? h('button', {
+        class: 'adm-chip adm-chip-add',
+        type: 'button',
+        text: '+ Save',
+        title: 'Save your edits as a scheme, to switch back to later. Saved schemes are kept with the site.',
+        onclick: () => {
+          namingScheme = true;
+          rerenderTab();
+          const field = screen.querySelector('.adm-chip-name');
+          if (field) field.focus();
+        },
+      }) : null));
+  }
+
+  // One colour: a round swatch that opens the colour picker. The page follows while it's dragged and
+  // is redrawn once it's let go.
+  function colourSwatch(theme, colors, [key, label, title]) {
+    const fallback = key === 'heroText' ? colors.heroText || (colors.mode === 'light' ? '#f5f6f8' : colors.text) : '#000000';
+    const value = isHex(colors[key]) ? colors[key] : isHex(fallback) ? fallback : '#000000';
+    return h('label', { class: 'adm-color', title },
+      h('input', {
+        type: 'color',
+        value,
+        oninput: (e) => { theme.colors[key] = e.target.value; window.SiteTheme.apply(theme); scheduleHistory(); },
+        onchange: () => rerenderTab(),
+      }),
+      h('span', { text: label }));
+  }
+
+  function coloursBox(theme) {
+    const T = window.SiteTheme;
+    const colors = T.colors(theme);
+    const mode = colors.mode === 'light' ? 'light' : 'dark';
+    const modeButton = (value, label) => h('button', {
+      class: `adm-seg${mode === value ? ' is-active' : ''}`,
+      type: 'button',
+      'aria-pressed': String(mode === value),
+      text: label,
+      onclick: () => {
+        if (mode === value) return;
+        switchMode(theme, value);
+        T.apply(theme);
+        rerenderTab();
+      },
+    });
+    return h('div', { class: 'adm-form adm-group-box', 'data-adm-section': 'colours' },
+      h('div', { class: 'adm-colours-head' },
+        h('h3', { class: 'adm-group', text: 'Colours' }),
+        h('div', { class: 'adm-segs', title: 'Switches the backgrounds and text; the accents stay. The top section keeps a dark background either way, so its text reads on photos and video.' },
+          modeButton('dark', 'Dark'), modeButton('light', 'Light')),
+        hasOwnColours(theme) ? iconBtn('\u21BA', 'Back to the scheme\u2019s own colours', () => {
+          useScheme(theme, { preset: theme.preset, colors: {} });
+          rerenderTab();
+        }) : null),
+      schemeChips(theme, (scheme) => { useScheme(theme, scheme); rerenderTab(); }, true),
+      h('div', { class: 'adm-colors' }, MAIN_COLORS.map((spec) => colourSwatch(theme, colors, spec))),
+      h('details', {
+        class: 'adm-more-colours',
+        open: Boolean(foldOpen.moreColours),
+        ontoggle: (e) => { foldOpen.moreColours = e.currentTarget.open; },
+      },
+      h('summary', { text: 'More colours' }),
+      h('div', { class: 'adm-colors' }, MORE_COLORS.map((spec) => colourSwatch(theme, colors, spec)))));
   }
 
   // ---------- Uploaded fonts ----------
@@ -3072,59 +3547,84 @@
       h('span', { class: 'adm-hint', text: 'Upload a font file (.woff2 is smallest), then pick it by name above. Files with the same name form one family: add a bold or italic file and set its weight and style, or leave a variable font on “All weights”. Make sure the font’s licence allows use on a website.' }));
   }
 
+  // ---------- Fonts as samples (Theme tab) ----------
+  // Each font is shown written in itself. For the samples, Google Fonts sends only the letters they use.
+  let fontSamplesLoaded = false;
+
+  function loadFontSamples() {
+    if (fontSamplesLoaded) return;
+    fontSamplesLoaded = true;
+    const names = Object.keys(window.SiteTheme.fonts).filter((name) => typeof window.SiteTheme.fonts[name] === 'string');
+    const letters = [...new Set(`Aa${names.join('')}`.replace(/\s/g, ''))].join('');
+    const families = names.map((name) => `family=${encodeURIComponent(name).replace(/%20/g, '+')}`).join('&');
+    document.head.appendChild(h('link', { rel: 'stylesheet', href: `https://fonts.googleapis.com/css2?${families}&text=${encodeURIComponent(letters)}&display=swap` }));
+  }
+
+  const fontCss = (name) => (!name || name === 'System font' ? '"Segoe UI", system-ui, sans-serif' : `"${name.replace(/["\\]/g, '')}", "Segoe UI", system-ui, sans-serif`);
+  let openFontPicker = null; // 'font' or 'headingFont': which list is open
+
+  function fontPicker(theme, key, label, emptyLabel) {
+    loadFontSamples();
+    const current = theme[key] || '';
+    const isOpen = openFontPicker === key;
+    const own = [...new Set(theme.customFonts.map((f) => f.name.trim()).filter(Boolean))];
+    // "Same as the text" shows the text font
+    const sample = (name) => h('span', { class: 'adm-font-sample', style: `font-family:${fontCss(name || theme.font)}`, text: 'Aa' });
+    const option = (name, text) => h('button', {
+      class: `adm-font${current === name ? ' is-active' : ''}`,
+      type: 'button',
+      'aria-pressed': String(current === name),
+      onclick: () => {
+        theme[key] = name;
+        openFontPicker = null;
+        rerenderTab();
+      },
+    }, sample(name), h('span', { class: 'adm-font-name', style: name ? `font-family:${fontCss(name)}` : null, text: text || name }));
+    return h('div', { class: 'adm-field' },
+      h('span', { class: 'adm-label', text: label }),
+      h('button', {
+        class: `adm-font-current${isOpen ? ' is-open' : ''}`,
+        type: 'button',
+        'aria-expanded': String(isOpen),
+        onclick: () => { openFontPicker = isOpen ? null : key; rerenderTab(); },
+      }, sample(current), h('span', { class: 'adm-font-name', text: current || emptyLabel }), h('span', { class: 'adm-hint', text: isOpen ? 'Close' : 'Change' })),
+      isOpen ? h('div', { class: 'adm-fonts' },
+        emptyLabel ? option('', emptyLabel) : null,
+        own.length ? [h('span', { class: 'adm-fonts-group', text: 'Your fonts' }), own.map((name) => option(name))] : null,
+        h('span', { class: 'adm-fonts-group', text: 'Google Fonts' }),
+        Object.keys(window.SiteTheme.fonts).map((name) => option(name))) : null);
+  }
+
+  // A group folded to one line saying what it's set to, e.g. "Mouse effect · Dot"; it stays open or
+  // closed while you work
+  const foldOpen = {};
+
+  function fold(key, title, value, ...children) {
+    return h('details', {
+      class: 'adm-group-box adm-fold',
+      'data-adm-section': key,
+      open: Boolean(foldOpen[key]),
+      ontoggle: (e) => { foldOpen[key] = e.currentTarget.open; },
+    },
+    h('summary', null, h('span', { class: 'adm-group', text: title }), h('span', { class: 'adm-fold-value', text: value })),
+    h('div', { class: 'adm-form' }, ...children));
+  }
+
+  let ownFontsOpen = false;
+
   function themeTab() {
     const theme = state.draft.theme;
-    const T = window.SiteTheme;
-    const colors = T.colors(theme);
-    // What the top section's text currently is (it follows Text on dark themes, light on light ones)
-    const heroText = colors.heroText || (colors.mode === 'light' ? '#f5f6f8' : colors.text);
-    const swatch = (color) => h('span', { class: 'adm-swatch', style: `background:${color}` });
-    const ownFamilies = [...new Set(theme.customFonts.map((f) => f.name.trim()).filter(Boolean))];
-    const fontOptions = (selected, emptyLabel) => [
-      emptyLabel ? h('option', { value: '', text: emptyLabel, selected: !selected }) : null,
-      ownFamilies.length ? h('optgroup', { label: 'Your fonts' }, ownFamilies.map((f) => h('option', { value: f, text: f, selected: selected === f }))) : null,
-      h('optgroup', { label: 'Google Fonts' }, Object.keys(T.fonts).map((f) => h('option', { value: f, text: f, selected: selected === f }))),
-    ];
     return h('div', { class: 'adm-form' },
-      h('p', { class: 'adm-help', text: 'Colours, fonts and corners for the whole site. Pick a starting point, then fine-tune any colour.' }),
-      h('div', { class: 'adm-form adm-group-box' },
-        h('h3', { class: 'adm-group', text: 'Starting point' }),
-        h('div', { class: 'adm-presets' }, Object.entries(T.presets).map(([key, p]) => h('button', {
-          class: `adm-preset${theme.preset === key ? ' is-active' : ''}`,
-          type: 'button',
-          'aria-pressed': String(theme.preset === key),
-          onclick: () => {
-            if (!confirmColourSwitch(theme)) return;
-            theme.preset = key;
-            theme.colors = {};
-            rerenderTab();
-          },
-        }, h('span', { class: 'adm-swatches' }, swatch(p.bg), swatch(p.surface), swatch(p.accent), swatch(p.accent2)), h('span', { text: p.name }))))),
-      colourSchemesBox(theme, swatch),
-      h('div', { class: 'adm-form adm-group-box' },
-        h('h3', { class: 'adm-group', text: 'Colours' }),
-        field('Light or dark', h('select', {
-          onchange: (e) => { switchMode(theme, e.target.value); rerenderTab(); },
-        }, h('option', { value: 'dark', text: 'Dark (light text)', selected: colors.mode !== 'light' }),
-        h('option', { value: 'light', text: 'Light (dark text)', selected: colors.mode === 'light' })),
-        'Switches the backgrounds and text colours; the accents stay. The top section keeps a dark background either way, so its text reads on photos and video.'),
-        h('div', { class: 'adm-colors' }, COLOR_FIELDS.map(([key, label]) => h('label', { class: 'adm-color' },
-          h('input', {
-            type: 'color',
-            value: isHex(colors[key]) ? colors[key] : isHex(heroText) && key === 'heroText' ? heroText : '#000000',
-            oninput: (e) => { theme.colors[key] = e.target.value; changed(); },
-          }),
-          h('span', { text: label })))),
-        h('button', { class: 'adm-btn', type: 'button', text: 'Reset colours to the preset', onclick: () => { theme.colors = {}; rerenderTab(); } })),
+      h('p', { class: 'adm-help', text: 'Colours, fonts and corners for the whole site. Hover a scheme to try it on the page, click to keep it, then fine-tune any colour.' }),
+      coloursBox(theme),
       h('div', { class: 'adm-form adm-group-box' },
         h('h3', { class: 'adm-group', text: 'Fonts' }),
-        h('div', { class: 'adm-row2' },
-          field('Text', h('select', { onchange: (e) => { theme.font = e.target.value; changed(); } }, fontOptions(theme.font))),
-          field('Headings', h('select', { onchange: (e) => { theme.headingFont = e.target.value; changed(); } }, fontOptions(theme.headingFont, 'Same as the text')))),
+        fontPicker(theme, 'font', 'Text'),
+        fontPicker(theme, 'headingFont', 'Headings', 'Same as the text'),
         h('p', { class: 'adm-hint', text: 'Headings are your name, the section titles, card titles and the logo.' }),
-        customFontsBox(theme)),
-      h('div', { class: 'adm-form adm-group-box' },
-        h('h3', { class: 'adm-group', text: 'Shape' }),
+        ownFontsOpen || theme.customFonts.length ? customFontsBox(theme)
+          : h('div', null, h('button', { class: 'adm-btn', type: 'button', text: '+ Your own font', onclick: () => { ownFontsOpen = true; rerenderTab(); } }))),
+      fold('corners', 'Corners', `${theme.radius} px`,
         slider(theme, 'radius', 'Corner roundness', 0, 28, 2, ' px', 'Cards, the showreel frame and pop-ups.')),
       cursorBox(theme));
   }
@@ -3377,8 +3877,8 @@
     const style = cur.style;
     const colour = () => choice(cur, 'color', 'Colour', [['invert', 'Inverted (shows on anything)'], ['accent', 'Main accent'], ['accent2', 'Second accent']]);
     const grow = (label) => check(cur, 'grow', label || 'Grow over links and buttons');
-    return h('div', { class: 'adm-form adm-group-box', 'data-adm-section': 'cursor' },
-      h('h3', { class: 'adm-group', text: 'Mouse effect' }),
+    const styleName = { off: 'Off', dot: 'Dot', label: 'Label', spotlight: 'Spotlight', image: cur.frames && cur.frames.count > 1 ? 'Your own pointer, animated' : 'Your own pointer' }[style] || style;
+    return fold('cursor', 'Mouse effect', styleName,
       field('Style', h('select', {
         onchange: (e) => {
           cur.style = e.target.value;
@@ -3483,23 +3983,36 @@
   }
 
   // The same first blocks for every section: title, menu and link, then its look and layout
-  function sectionBasics(id) {
-    const set = state.draft.sections[id];
+  // Content: the title first
+  function titleField(id, set) {
+    const keys = SECTION_KEYS[id];
+    const titleHint = keys ? uiDefault(keys[0]) : kindOf(id) === 'grid' ? uiDefault('work.title') : '';
+    return field('Title', text(set, 'title', { placeholder: titleHint, onchange: () => rerenderTab() }));
+  }
+
+  // Layout: the arrangement, the look and the parts
+  function layoutTab(id, set) {
+    return [
+      kindOf(id) !== 'text' && layoutOptions(id) ? h('div', { class: 'adm-form adm-group-box' },
+        h('h3', { class: 'adm-group', text: 'Arrangement' }),
+        layoutPicker(id, layoutOptions(id))) : null,
+      lookBox(id, set),
+    ];
+  }
+
+  // Settings: menu, address and page
+  function settingsBox(id, set) {
     const keys = SECTION_KEYS[id];
     const titleHint = keys ? uiDefault(keys[0]) : kindOf(id) === 'grid' ? uiDefault('work.title') : '';
     const navHint = keys && keys[1] ? uiDefault(keys[1]) : set.title || titleHint || 'Same as the title';
     return [
       h('div', { class: 'adm-form adm-group-box' },
-        h('h3', { class: 'adm-group', text: 'Section' }),
-        h('div', { class: 'adm-row2' },
-          field('Title', text(set, 'title', { placeholder: titleHint, onchange: () => rerenderTab() })),
-          field('Menu label', text(set, 'nav', { placeholder: navHint }))),
+        field('Menu label', text(set, 'nav', { placeholder: navHint })),
         check(set, 'inMenu', 'Show in the menu'),
-        anchorField(id, set)),
-      kindOf(id) !== 'text' && layoutOptions(id) ? h('div', { class: 'adm-form adm-group-box' },
-        h('h3', { class: 'adm-group', text: 'Layout' }),
-        layoutPicker(id, layoutOptions(id))) : null,
-      lookBox(id, set),
+        anchorField(id, set),
+        state.draft.pages.length ? field('On the page', h('select', { onchange: (e) => moveToPage(id, e.target.value) },
+          [['', 'Home'], ...state.draft.pages.map((pg) => [pg.id, pg.title || pg.slug])]
+            .map(([value, label]) => h('option', { value, text: label, selected: value === shownPage() }))), 'Moving it takes it off this page.') : null),
     ];
   }
 
@@ -3535,8 +4048,7 @@
       note);
   }
 
-  // Background, title look, width, spacing and devices; folded away until needed
-  let lookOpen = false;
+  // Background, title look, width, spacing and devices, then the parts
 
   function lookBox(id, set) {
     const background = h('select', {
@@ -3547,8 +4059,8 @@
       },
     }, [['main', 'Page background'], ['alt', 'Second background'], ['custom', 'Your own colour or picture']]
       .map(([value, label]) => h('option', { value, text: label, selected: set.background === value })));
-    return h('details', { class: 'adm-group-box adm-more', open: lookOpen, ontoggle: (e) => { lookOpen = e.currentTarget.open; } },
-      h('summary', { class: 'adm-group', text: 'Look and layout' }),
+    return h('div', { class: 'adm-form adm-group-box adm-look' },
+      h('h3', { class: 'adm-group', text: 'Look' }),
       h('div', { class: 'adm-form' },
         h('div', { class: 'adm-row2' },
           field('Background', background),
@@ -3592,7 +4104,7 @@
     const c = state.draft;
     return h('div', { class: 'adm-form' },
       heroTab(),
-      h('div', { class: 'adm-form adm-group-box' },
+      h('div', { class: 'adm-form adm-group-box', 'data-adm-section': 'resume' },
         h('h3', { class: 'adm-group', text: 'Resume' }),
         fileField('Resume (PDF)', c.resume, 'application/pdf,.pdf', (file) => {
           const path = stageFile(file, 'assets/resume.pdf');
@@ -3625,7 +4137,7 @@
       partToggles([['contact.intro', 'Intro line'], ['contact.form', 'Message form'], ['contact.linkedin', 'LinkedIn button'],
         ['contact.socials', 'Social icons'], ['contact.email', 'Email address']]),
       field('Intro line', area(state.draft.intros, 'contact', 2)),
-      h('p', { class: 'adm-hint', text: 'Your email address and social links are in the Site tab.' }),
+      h('p', { class: 'adm-hint', text: 'Your email address, social links and how the form sends messages are in the Site tab.' }),
     ];
   }
 
@@ -3762,7 +4274,7 @@
   function gridForProject(index) {
     const c = state.draft;
     const item = c.work[index];
-    return c.sections.order.find((id) => {
+    return allOrders().flat().find((id) => {
       if (kindOf(id) !== 'work' && kindOf(id) !== 'grid') return false;
       const allowed = c.sections[id].categories || [];
       return !allowed.length || (item && allowed.includes(item.type));
@@ -3778,7 +4290,7 @@
     const entries = c.work.map((item, index) => ({ item, index }))
       .filter(({ item }) => !set.categories.length || set.categories.includes(item.type));
     // Categories no Work section on the page shows
-    const shown = c.sections.order.filter((sid) => kindOf(sid) === 'work' || kindOf(sid) === 'grid').map((sid) => c.sections[sid].categories || []);
+    const shown = allOrders().flat().filter((sid) => kindOf(sid) === 'work' || kindOf(sid) === 'grid').map((sid) => c.sections[sid].categories || []);
     const missing = shown.some((list) => !list.length) ? [] : c.categories.filter((cat) => !shown.some((list) => list.includes(cat.id)) && c.work.some((w) => w.type === cat.id));
 
     return [
@@ -3911,9 +4423,34 @@
       projectsList(entries, cat || (c.categories[0] || {}).id));
   }
 
+  // An open section shows one of these at a time (the same one for every section, until switched)
+  const ROW_TABS = [['content', 'Content'], ['layout', 'Layout'], ['settings', 'Settings']];
+
+  function rowTabs(tabs, current) {
+    return h('div', { class: 'adm-row-tabs', role: 'tablist' }, tabs.map(([tab, label]) => h('button', {
+      class: `adm-row-tab${tab === current ? ' is-active' : ''}`,
+      type: 'button',
+      role: 'tab',
+      'aria-selected': String(tab === current),
+      text: label,
+      onclick: () => { state.rowTab = tab; rerenderTab(); },
+    })));
+  }
+
   function editorFor(id) {
     const kind = id === 'hero' || id === 'footer' ? id : kindOf(id);
-    if (kind === 'hero') return heroEditor();
+    if (kind === 'hero') {
+      // The top section: its text and resume, or everything about how it looks
+      const tabs = ROW_TABS.slice(0, 2);
+      const tab = tabs.some(([t]) => t === state.rowTab) ? state.rowTab : 'content';
+      const all = heroEditor();
+      const textBox = all.querySelector('[data-adm-section="hero"]');
+      const resume = all.querySelector('[data-adm-section="resume"]');
+      if (tab === 'content') return h('div', { class: 'adm-form' }, rowTabs(tabs, tab), textBox, resume);
+      textBox.remove();
+      resume.remove();
+      return h('div', { class: 'adm-form' }, rowTabs(tabs, tab), all);
+    }
     if (kind === 'footer') {
       return h('div', { class: 'adm-form' },
         partToggles([['footer.links', 'Links']]),
@@ -3921,11 +4458,17 @@
     }
     const builtin = window.SiteSections.builtin.includes(id);
     const added = state.draft.customSections.find((s) => s.id === id);
-    const body = added ? SECTION_EDITORS[kind](added)
-      : { about: aboutEditor, reel: reelEditor, work: () => workEditor(id), grid: () => workEditor(id), experience: experienceTab, toolkit: toolkitTab, contact: contactEditor }[kind]();
+    const tab = ROW_TABS.some(([t]) => t === state.rowTab) ? state.rowTab : 'content';
+    const set = state.draft.sections[id];
+    if (tab === 'layout') return h('div', { class: 'adm-form' }, rowTabs(ROW_TABS, tab), layoutTab(id, set));
+    if (tab === 'content') {
+      const body = added ? SECTION_EDITORS[kind](added)
+        : { about: aboutEditor, reel: reelEditor, work: () => workEditor(id), grid: () => workEditor(id), experience: experienceTab, toolkit: toolkitTab, contact: contactEditor }[kind]();
+      return h('div', { class: 'adm-form' }, rowTabs(ROW_TABS, tab), titleField(id, set), body);
+    }
     return h('div', { class: 'adm-form' },
-      sectionBasics(id),
-      body,
+      rowTabs(ROW_TABS, tab),
+      settingsBox(id, set),
       h('div', { class: 'adm-row-foot' },
         builtin ? null : h('button', {
           class: 'adm-btn',
@@ -3943,9 +4486,128 @@
         })));
   }
 
+  // ---------- Pages ----------
+  // The panel works on the page shown on the screen: its outline, adding and moving sections. Switching
+  // pages (here or with the site's menu) shows that page and its sections.
+  const shownPage = () => (window.SitePages ? window.SitePages.current() : '');
+
+  // The sections of the page shown, in their order (the array itself, to change)
+  function pageOrder() {
+    const page = shownPage() && state.draft.pages.find((pg) => pg.id === shownPage());
+    return page ? page.order : state.draft.sections.order;
+  }
+
+  const allOrders = () => [state.draft.sections.order, ...state.draft.pages.map((pg) => pg.order)];
+
+  // A page's address name: lowercase, unique among the pages
+  function pageSlug(text, exceptId) {
+    const base = anchorSlug(text) || 'page';
+    let slug = base;
+    for (let n = 2; state.draft.pages.some((pg) => pg.slug === slug && pg.id !== exceptId); n++) slug = `${base}-${n}`;
+    return slug;
+  }
+
+  function goToPage(pageId) {
+    stopEditing();
+    if (pageId === shownPage()) return;
+    state.openRow = null;
+    window.SitePages.show(pageId);
+  }
+
+  // The site switched pages (here, or a link in its menu): the page gets its editing extras, the panel its outline
+  document.addEventListener('site:pagechange', () => {
+    if (!state.draft || !root || root.hidden) return;
+    renderPage(state.draft);
+    const body = screen && screen.querySelector('.adm-body');
+    if (body && state.tab === 'page') {
+      state.allProjects = false;
+      renderTab(body);
+    }
+  });
+
+  function addPage() {
+    const c = state.draft;
+    const id = `page-${Date.now().toString(36)}`;
+    // It starts with a Text section, so there's something to see and change
+    const first = newSectionId('text');
+    c.sections[first] = newSectionSettings('text', 'New page');
+    c.customSections.push(normalizeSection({ id: first, type: 'text', ...clone(SECTION_STARTERS.text) }));
+    c.pages.push({ id, slug: pageSlug('new page'), title: 'New page', nav: '', inMenu: true, order: [first] });
+    rerenderTab();
+    goToPage(id);
+  }
+
+  function deletePage(page) {
+    const c = state.draft;
+    if (!confirm(`Delete the page “${page.title || page.slug}”? Its sections move to the end of the home page, so nothing is lost.`)) return;
+    const home = c.sections.order;
+    page.order.forEach((id) => {
+      if (home.includes('contact')) home.splice(home.indexOf('contact'), 0, id);
+      else home.push(id);
+    });
+    c.pages = c.pages.filter((pg) => pg !== page);
+    rerenderTab();
+    goToPage('');
+  }
+
+  // A section to another page (at its end; on the home page, before Contact)
+  function moveToPage(id, pageId) {
+    const c = state.draft;
+    allOrders().forEach((order) => { if (order.includes(id)) order.splice(order.indexOf(id), 1); });
+    const dest = pageId ? c.pages.find((pg) => pg.id === pageId).order : c.sections.order;
+    if (!pageId && dest.includes('contact')) dest.splice(dest.indexOf('contact'), 0, id);
+    else dest.push(id);
+    state.openRow = null;
+    rerenderTab();
+  }
+
+  // The pages, to switch between, and the settings of the page shown
+  function pagesBox() {
+    const c = state.draft;
+    const current = shownPage();
+    const page = c.pages.find((pg) => pg.id === current);
+    const pill = (id, label) => h('button', {
+      class: `adm-page-pill${id === current ? ' is-active' : ''}`,
+      type: 'button',
+      'aria-pressed': String(id === current),
+      text: label,
+      onclick: () => goToPage(id),
+    });
+    const at = page ? c.pages.indexOf(page) : -1;
+    const movePage = (dir) => {
+      [c.pages[at], c.pages[at + dir]] = [c.pages[at + dir], c.pages[at]];
+      rerenderTab();
+    };
+    return h('div', { class: 'adm-form adm-group-box adm-pages' },
+      h('div', { class: 'adm-page-pills' },
+        pill('', 'Home'),
+        c.pages.map((pg) => pill(pg.id, pg.title || pg.slug)),
+        h('button', { class: 'adm-page-pill adm-page-add', type: 'button', text: '+ New page', onclick: addPage })),
+      page ? h('div', { class: 'adm-form' },
+        h('div', { class: 'adm-row2' },
+          field('Page title', text(page, 'title', { onchange: () => rerenderTab() })),
+          field('Menu label', text(page, 'nav', { placeholder: page.title || 'Same as the title' }))),
+        check(page, 'inMenu', 'Show in the menu'),
+        field('Address', h('input', {
+          type: 'text',
+          value: page.slug,
+          onchange: (e) => {
+            page.slug = pageSlug(e.target.value, page.id);
+            e.target.value = page.slug;
+            window.history.replaceState(null, '', window.SitePages.href(page.id)); // the browser's (`history` here is the undo list)
+            rerenderTab();
+          },
+        }), `${siteAddress(c.site) || ''}?page=${page.slug}`),
+        h('div', { class: 'adm-row-foot' },
+          iconBtn('←', 'Earlier in the menu', () => movePage(-1), at === 0),
+          iconBtn('→', 'Later in the menu', () => movePage(1), at === c.pages.length - 1),
+          h('button', { class: 'adm-btn adm-btn-danger', type: 'button', text: 'Delete page', onclick: () => deletePage(page) })))
+        : c.pages.length ? null : h('p', { class: 'adm-hint', text: 'One page for now. A new page gets its own address and a link in the menu, and sections you add or move there.' }));
+  }
+
   // ---------- Adding, removing and moving sections ----------
   function insertSection(id) {
-    const order = state.draft.sections.order;
+    const order = pageOrder();
     const after = { experience: 'work', toolkit: 'experience' }[id];
     const at = after && order.includes(after) ? order.indexOf(after) + 1
       : id !== 'contact' && order.includes('contact') ? order.indexOf('contact') : order.length;
@@ -3964,15 +4626,19 @@
 
   const newSectionId = (kind) => `${kind === 'grid' ? 'work' : 'section'}-${Date.now().toString(36)}`;
 
-  function addSection(kind, at) {
-    const c = state.draft;
-    const id = newSectionId(kind);
+  // A new section's settings, with the standard look of its kind
+  function newSectionSettings(kind, title) {
     const look = window.SiteSections.look[kind];
-    const title = (NEW_SECTIONS.find(([k]) => k === kind) || [])[3] || '';
-    c.sections[id] = {
+    return {
       title, nav: '', anchor: '', inMenu: look.inMenu, background: look.background, bgColor: '', bgImage: '', bgDarken: 50,
       titleStyle: look.titleStyle, titleSize: 100, width: 'normal', spacing: 'normal', device: 'all',
     };
+  }
+
+  function addSection(kind, at) {
+    const c = state.draft;
+    const id = newSectionId(kind);
+    c.sections[id] = newSectionSettings(kind, (NEW_SECTIONS.find(([k]) => k === kind) || [])[3] || '');
     if (kind === 'grid') {
       c.sections[id].categories = [];
       c.workGrids.push({ id, intro: '' });
@@ -3982,7 +4648,7 @@
     if (at == null) {
       insertSection(id);
     } else {
-      c.sections.order.splice(at, 0, id);
+      pageOrder().splice(at, 0, id);
       state.openRow = id;
     }
     rerenderTab();
@@ -4003,7 +4669,7 @@
     Object.keys(c.hidden).forEach((key) => {
       if (key.startsWith(`${id}.`)) c.hidden[copyId + key.slice(id.length)] = true;
     });
-    const order = c.sections.order;
+    const order = pageOrder();
     order.splice(order.indexOf(id) + 1, 0, copyId);
     state.openRow = copyId;
     rerenderTab();
@@ -4016,7 +4682,7 @@
     if (!confirm(builtin
       ? `Take “${sectionLabel(id)}” off the page? Its content is kept, and you can add it back with “+ Add section”.`
       : `Delete “${sectionLabel(id)}” and its content? This can’t be undone after saving.`)) return;
-    c.sections.order = c.sections.order.filter((sid) => sid !== id);
+    allOrders().forEach((order) => { if (order.includes(id)) order.splice(order.indexOf(id), 1); });
     if (builtin) {
       c.sections.removed.push(id);
     } else {
@@ -4030,7 +4696,7 @@
   }
 
   function moveSection(from, to) {
-    const order = state.draft.sections.order;
+    const order = pageOrder();
     if (to < 0 || to >= order.length || from === to) return;
     const id = order[from];
     keepInPlace(() => document.getElementById(id), () => {
@@ -4054,8 +4720,8 @@
 
   function outlineRow(id, index) {
     const c = state.draft;
-    const fixed = id === 'hero' || id === 'footer';
-    const kind = fixed ? id : kindOf(id);
+    const fixed = id === 'footer';
+    const kind = id === 'hero' || fixed ? id : kindOf(id);
     const isOpen = state.openRow === id;
     const isHidden = Boolean(c.hidden[id]);
     const label = id === 'hero' ? 'Top section' : id === 'footer' ? 'Footer' : sectionLabel(id);
@@ -4088,13 +4754,13 @@
         }, h('span', { class: 'adm-badge', text: KIND_LABELS[kind] }), h('span', { text: label })),
         h('div', { class: 'adm-row-controls' },
           fixed ? null : iconBtn('↑', 'Move up', () => moveSection(index, index - 1), index === 0),
-          fixed ? null : iconBtn('↓', 'Move down', () => moveSection(index, index + 1), index === c.sections.order.length - 1),
+          fixed ? null : iconBtn('↓', 'Move down', () => moveSection(index, index + 1), index === pageOrder().length - 1),
           eye)),
       isOpen ? h('div', { class: 'adm-row-body' }, editorFor(id)) : null);
 
     if (fixed) return row;
     return sortable(row, handle, 'sections', id, (from, to, before) => keepInPlace(() => document.getElementById(from), () => {
-      const order = c.sections.order;
+      const order = pageOrder();
       moveTo(order, order.indexOf(from), order.indexOf(to), before);
       rerenderTab();
     }));
@@ -4106,7 +4772,7 @@
     const removed = c.sections.removed.filter((id) => window.SiteSections.builtin.includes(id));
     return h('div', { class: 'adm-form adm-outline' },
       h('div', { class: 'adm-section-head' },
-        h('p', { class: 'adm-help', text: 'Your page from top to bottom. Click a section to edit it, drag ⠿ (or use the arrows) to move it, and use the eye to show or hide it.' }),
+        h('p', { class: 'adm-help', text: 'The page from top to bottom. Click a section to edit it, drag ⠿ (or use the arrows) to move it, and use the eye to show or hide it.' }),
         h('button', {
           class: 'adm-btn',
           type: 'button',
@@ -4114,15 +4780,21 @@
           title: 'Every project in one list, to search, reorder and edit',
           onclick: () => { state.allProjects = true; rerenderTab(); },
         })),
-      outlineRow('hero'),
-      h('div', { class: 'adm-outline-list' }, c.sections.order.map((id, i) => outlineRow(id, i))),
+      pagesBox(),
+      h('div', { class: 'adm-outline-list' }, pageOrder().map((id, i) => outlineRow(id, i))),
       h('div', { class: 'adm-add' },
-        h('span', { class: 'adm-label', text: '+ Add section' }),
-        h('div', { class: 'adm-add-grid' }, NEW_SECTIONS.map(([kind, name, desc]) => h('button', {
+        h('button', {
+          class: `adm-btn adm-add-toggle${state.addOpen ? ' is-open' : ''}`,
+          type: 'button',
+          text: state.addOpen ? '\u00D7 Close' : '+ Add section',
+          'aria-expanded': String(Boolean(state.addOpen)),
+          onclick: () => { state.addOpen = !state.addOpen; rerenderTab(); },
+        }),
+        state.addOpen ? h('div', { class: 'adm-add-grid' }, NEW_SECTIONS.map(([kind, name, desc]) => h('button', {
           class: 'adm-add-card',
           type: 'button',
-          onclick: () => addSection(kind),
-        }, h('strong', { text: name }), h('span', { text: desc })))),
+          onclick: () => { state.addOpen = false; addSection(kind); },
+        }, h('strong', { text: name }), h('span', { text: desc })))) : null,
         removed.length ? h('div', { class: 'adm-inline' },
           h('span', { class: 'adm-hint', text: 'Put back:' }),
           removed.map((id) => h('button', {
@@ -4558,6 +5230,49 @@
         h('div', { class: 'adm-row2' }, field('Label', text(row, 'label')), field('Tools (comma separated)', list(row, 'tools'))))));
   }
 
+  // How the contact form sends (see "Contact form" in js/main.js)
+  const FORM_SERVICES = {
+    '': ['Opens the visitor’s email app (nothing to set up)', '', ''],
+    web3forms: ['Web3Forms: sent from the page (free, 250 a month)', 'Access key',
+      'On web3forms.com, type the email address messages should go to: the key arrives in that inbox. No account needed.'],
+    formspree: ['Formspree: sent from the page (free, 50 a month)', 'Form ID',
+      'On formspree.io, make a form: its address ends in /f/ and then the ID, e.g. xyzabcde.'],
+  };
+
+  function contactFormBox() {
+    const form = state.draft.contactForm;
+    const [, keyLabel, keyHint] = FORM_SERVICES[form.service] || FORM_SERVICES[''];
+    const result = h('span', { class: 'adm-hint' });
+    const test = h('button', {
+      class: 'adm-btn',
+      type: 'button',
+      text: 'Send a test message',
+      onclick: async () => {
+        test.disabled = true;
+        result.className = 'adm-hint';
+        result.textContent = 'Sending…';
+        try {
+          await window.SiteContact.send({ name: 'Your site’s admin panel', email: state.draft.links.email || 'test@example.com', subject: 'Test message', message: 'This is a test from your portfolio’s admin panel. The contact form works.' }, form);
+          result.className = 'adm-status is-ok';
+          result.textContent = 'Sent. Check the inbox it goes to (and its spam folder, the first time).';
+        } catch (error) {
+          result.className = 'adm-error';
+          result.textContent = `Not sent: ${error.message || 'the service didn’t accept it'}. Check the ${keyLabel.toLowerCase()}.`;
+        }
+        test.disabled = false;
+      },
+    });
+    return h('div', { class: 'adm-form adm-group-box', 'data-adm-section': 'contact-form' },
+      h('h3', { class: 'adm-group', text: 'Contact form' }),
+      field('How messages are sent', h('select', { onchange: (e) => { form.service = e.target.value; rerenderTab(); } },
+        Object.entries(FORM_SERVICES).map(([value, [label]]) => h('option', { value, text: label, selected: form.service === value })))),
+      form.service ? [
+        field(keyLabel, text(form, 'key', { placeholder: form.service === 'formspree' ? 'xyzabcde' : 'e.g. 1a2b3c4d-…', onchange: () => rerenderTab() }), keyHint),
+        form.key.trim() ? h('div', { class: 'adm-inline' }, test, result) : null,
+        h('p', { class: 'adm-hint', text: 'If sending ever fails, visitors are offered to send it by email instead, so no message is lost. The key is meant to be public: it only lets people send you messages.' }),
+      ] : null);
+  }
+
   // Platforms always listed in the form; the others appear once picked from "Add a platform" or filled in
   const BASIC_PLATFORMS = ['instagram', 'linkedin', 'youtube', 'github', 'facebook'];
   const shownPlatforms = new Set();
@@ -4583,6 +5298,7 @@
       h('h3', { class: 'adm-group', text: 'Links' }),
       h('p', { class: 'adm-help', text: 'Every platform with an address gets an icon in the contact section (LinkedIn gets its own button there). Tick “In footer” to also list it at the bottom of the page. Leave one empty to hide it everywhere.' }),
       field('Email address (contact form and email link)', text(c.links, 'email', { type: 'email', placeholder: 'you@example.com' })),
+      contactFormBox(),
       visible.map((p) => h('div', { class: 'adm-link-row' },
         field(p.name, text(c.links, p.key, { type: 'url', placeholder: 'https://…' })),
         footerBox(p.key))),

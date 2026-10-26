@@ -120,6 +120,8 @@ a { color: inherit; text-decoration: none; }
 }
 
 .main-nav a:hover::after { clip-path: inset(0 0 0 0); }
+/* The page being shown (pages besides the home page, admin: Page tab) */
+.main-nav a.is-current { color: var(--accent); }
 
 /* Language dropdown (desktop): small "EN ▾" button with a list of full names */
 .lang-menu { position: relative; }
@@ -1680,6 +1682,16 @@ main > section.is-off-page { display: none !important; }
   font-size: 0.82rem;
   color: var(--text-dim);
 }
+
+/* After sending (or while it sends): a line saying how it went */
+.form-status { margin: 14px 0 0; padding: 10px 14px; border-radius: var(--radius); background: var(--surface); font-size: 0.92rem; }
+.form-status.is-ok { color: #6ee7a0; }
+.form-status.is-error { color: var(--accent-orange); }
+.form-status.is-busy { color: var(--text-dim); }
+.form-status a { color: var(--text); text-decoration: underline; }
+
+/* The spam trap: out of sight, and skipped by keyboards and screen readers */
+.form-trap { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
 
 /* Social icons in the button row under the form, sized to match the buttons */
 .contact-socials {

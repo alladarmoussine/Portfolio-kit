@@ -12,12 +12,36 @@ window.SITE_CONTENT = {
       "branch": "main"
     }
   },
+  "languages": {
+    "main": "en",
+    "available": [
+      "en",
+      "nl",
+      "fr",
+      "ro"
+    ],
+    "ui": {}
+  },
   "theme": {
     "preset": "midnight",
     "font": "Geologica",
     "headingFont": "",
     "radius": 14,
-    "colors": {}
+    "colors": {},
+    "saved": [],
+    "customFonts": [],
+    "cursor": {
+      "style": "dot",
+      "size": 14,
+      "color": "invert",
+      "grow": true,
+      "image": "",
+      "tip": "center",
+      "glowSize": 320,
+      "glowStrength": 18,
+      "glowColor": "accent",
+      "magnetic": false
+    }
   },
   "categories": [
     {
@@ -35,6 +59,7 @@ window.SITE_CONTENT = {
   ],
   "sections": {
     "order": [
+      "hero",
       "about",
       "reel",
       "work",
@@ -74,6 +99,10 @@ window.SITE_CONTENT = {
     "youtube": "",
     "github": "",
     "facebook": ""
+  },
+  "contactForm": {
+    "service": "",
+    "key": ""
   },
   "customLinks": [],
   "footerLinks": [
@@ -152,5 +181,6 @@ window.SITE_CONTENT = {
     "reel": true
   },
   "workGrids": [],
-  "customSections": []
+  "customSections": [],
+  "pages": []
 };

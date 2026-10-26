@@ -49,7 +49,7 @@
 
 <main id="top">
 
-  <section class="hero">
+  <section class="hero" id="hero">
     <!-- Optional background photo or looping video, set in content/site.js (hero.background / hero.backgroundVideo) -->
     <div class="hero-media" id="hero-media" aria-hidden="true"></div>
     <div class="container hero-inner">
@@ -182,6 +182,11 @@
           <label for="message" data-i18n="contact.message">Message</label>
           <textarea id="message" name="message" rows="6" required></textarea>
         </div>
+        <!-- Left empty by people; spam robots fill it in, and their message is quietly dropped -->
+        <div class="form-trap" aria-hidden="true">
+          <label for="website">Website</label>
+          <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
+        </div>
         <div class="form-actions">
           <button type="submit" class="btn btn-primary" data-part="contact.form" data-i18n="contact.send">Send message</button>
           <a href="#" target="_blank" rel="noopener" class="btn btn-ghost linkedin-btn" data-part="contact.linkedin" data-link="linkedin" hidden>
@@ -193,6 +198,7 @@
           </div>
         </div>
         <p class="form-note" data-part="contact.form" data-i18n="contact.note"></p>
+        <p class="form-status" id="form-status" role="status" aria-live="polite" hidden></p>
       </form>
 
       <div class="contact-alt" data-edit-item="links" data-part="contact.email">

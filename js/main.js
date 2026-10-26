@@ -346,6 +346,14 @@ function field(node, path) {
   return node;
 }
 
+// A field that may be empty: while editing, it says what goes there (only shown in the admin panel)
+function blankable(node, path, placeholder) {
+  field(node, path);
+  node.dataset.placeholder = placeholder;
+  node.classList.toggle('is-empty', !String(node.textContent || '').trim());
+  return node;
+}
+
 function youtubeEmbed(id, title, autoplay) {
   const iframe = document.createElement('iframe');
   iframe.src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}${autoplay ? '?autoplay=1' : ''}`;
@@ -674,6 +682,10 @@ function renderGrids(content) {
 function renderReel(reel) {
   const id = reel && reel.youtube;
   reelFrame.dataset.editItem = 'reel';
+  // Same video as before: keep the player (rebuilding it reloads it, e.g. while editing in the admin panel)
+  const key = `${id || ''}|${currentLang}`;
+  if (reelFrame.dataset.key === key && reelFrame.querySelector('iframe, .reel-placeholder')) return;
+  reelFrame.dataset.key = key;
   reelFrame.innerHTML = '';
   if (id) {
     const iframe = youtubeEmbed(id, t('reel.title'), false);
@@ -721,16 +733,16 @@ function renderExperience(entries) {
     li.dataset.editItem = `experience.${i}`;
     li.dataset.entry = `experience.${i}`;
     const h3 = el('h3');
-    h3.appendChild(field(el('span', null, entry.role), `experience.${i}.role`));
-    if (entry.org) {
+    h3.appendChild(blankable(el('span', null, entry.role), `experience.${i}.role`, 'Role'));
+    if (entry.org || isEditing()) {
       h3.appendChild(document.createTextNode(' '));
-      h3.appendChild(field(el('span', 'timeline-org', entry.org), `experience.${i}.org`));
+      h3.appendChild(blankable(el('span', 'timeline-org', entry.org), `experience.${i}.org`, 'Company or project'));
     }
-    // Empty date or description: left out instead of an empty line
+    // Empty date or description: left out instead of an empty line (while editing: a spot to fill in)
     li.append(...[
-      entry.date ? field(el('span', 'timeline-date', entry.date), `experience.${i}.date`) : null,
+      entry.date || isEditing() ? blankable(el('span', 'timeline-date', entry.date), `experience.${i}.date`, 'Dates') : null,
       h3,
-      entry.text ? field(el('p', null, entry.text), `experience.${i}.text`) : null,
+      entry.text || isEditing() ? blankable(el('p', null, entry.text), `experience.${i}.text`, 'What you did') : null,
     ].filter(Boolean));
     timeline.appendChild(li);
   });
@@ -1274,7 +1286,11 @@ function applyTheme(theme) {
 }
 
 // Used by the admin panel (Theme tab, and writing these into index.html on save)
-window.SiteTheme = { presets: THEME_PRESETS, fonts: THEME_FONTS, colors: themeColors, css: themeCss, fontsHref: themeFontsHref, favicon: faviconHref };
+// apply() recolours the page at once without rebuilding it (the panel uses it while a colour is dragged)
+window.SiteTheme = {
+  presets: THEME_PRESETS, fonts: THEME_FONTS, colors: themeColors, css: themeCss, fontsHref: themeFontsHref, favicon: faviconHref,
+  apply: (theme) => { applyTheme(theme); matchHeroFade(); },
+};
 
 // ---------- Mouse effect (admin: Theme tab) ----------
 // content.theme.cursor = { style, size, color, grow, image, tip, glowSize, glowStrength, glowColor, magnetic, frames }
@@ -1502,6 +1518,7 @@ const SECTION_TEXT = {
 };
 
 function sectionKind(content, id) {
+  if (id === 'hero') return 'hero';
   if (BUILTIN_SECTIONS.includes(id)) return id;
   if ((content.workGrids || []).some((g) => g.id === id)) return 'grid';
   const added = (content.customSections || []).find((s) => s.id === id);
@@ -1565,12 +1582,24 @@ window.addEventListener('hashchange', () => scrollToAnchor(hashName(window.locat
 
 // Sections on the page, top to bottom. Built-in sections that aren't in the saved order (and weren't
 // removed) are added where they belong, so content saved before they existed still shows them.
-function sectionOrder(content) {
+// pageId: '' for the home page (content.sections.order, which also holds the top section, "hero"), else
+// the id of one of content.pages, whose sections are in its own order. A section is on one page only.
+// Leave it out for the page being shown.
+function sectionOrder(content, pageId = currentPageId) {
   const sections = content.sections || {};
   const ids = [...BUILTIN_SECTIONS, ...(content.workGrids || []).map((g) => g.id), ...(content.customSections || []).map((s) => s.id)];
   const removed = Array.isArray(sections.removed) ? sections.removed : [];
-  const order = [...new Set((Array.isArray(sections.order) ? sections.order : []).filter((id) => ids.includes(id) && !removed.includes(id)))];
+  const pages = pagesOf(content);
+  if (pageId) {
+    const page = pages.find((pg) => pg.id === pageId);
+    return page ? [...new Set(page.order.filter((id) => ids.includes(id) && !removed.includes(id)))] : [];
+  }
+  const elsewhere = new Set(pages.flatMap((pg) => pg.order));
+  const order = [...new Set((Array.isArray(sections.order) ? sections.order : []).filter((id) => (id === 'hero' || ids.includes(id)) && !removed.includes(id) && !elsewhere.has(id)))];
+  // The top section comes first unless it has been moved
+  if (!order.includes('hero')) order.unshift('hero');
   ids.forEach((id) => {
+    if (elsewhere.has(id)) return;
     if (order.includes(id) || removed.includes(id)) return;
     const after = { experience: 'work', toolkit: 'experience' }[id];
     if (after && order.includes(after)) order.splice(order.indexOf(after) + 1, 0, id);
@@ -1580,12 +1609,68 @@ function sectionOrder(content) {
   return order;
 }
 
+// ---------- Pages ----------
+// content.pages = [{ id, slug, title, nav, inMenu, order: [section ids] }]: pages besides the home page,
+// each with its own sections. A page's address is ?page=<slug> (the same index.html); links between pages
+// switch without reloading, and the browser's back button goes back.
+let currentPageId = ''; // '' = the home page
+
+function pagesOf(content) {
+  return (Array.isArray(content.pages) ? content.pages : [])
+    .filter((pg) => pg && /^[\w-]+$/.test(pg.id || '') && /^[a-z0-9-]+$/.test(pg.slug || ''))
+    .map((pg) => ({ ...pg, order: Array.isArray(pg.order) ? pg.order : [] }));
+}
+
+const homeHref = () => window.location.pathname;
+const pageHref = (page) => (page ? `${homeHref()}?page=${encodeURIComponent(page.slug)}` : homeHref());
+
+function pageFromUrl(content) {
+  const slug = new URLSearchParams(window.location.search).get('page');
+  const page = slug && pagesOf(content).find((pg) => pg.slug === slug);
+  return page ? page.id : '';
+}
+
+// Shows another page (or the home page, ''): the address changes, the page is drawn again
+function showPage(pageId, { push = true, hash = '' } = {}) {
+  const page = pagesOf(currentContent).find((pg) => pg.id === pageId) || null;
+  currentPageId = page ? page.id : '';
+  if (push) history.pushState(null, '', pageHref(page) + (hash ? `#${hash}` : ''));
+  renderSite(currentContent);
+  if (hash && (scrollToAnchor(hash, false) || document.getElementById(hash))) {
+    if (document.getElementById(hash)) document.getElementById(hash).scrollIntoView({ behavior: 'instant', block: 'start' });
+  } else {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+  document.dispatchEvent(new CustomEvent('site:pagechange', { detail: { pageId: currentPageId } }));
+}
+
+// Links to a page of this site (?page=…, or the home page with a #section) switch without reloading
+document.addEventListener('click', (e) => {
+  const link = e.target.closest && e.target.closest('a[data-page]');
+  if (!link || e.defaultPrevented || e.ctrlKey || e.metaKey || e.shiftKey || e.button > 0) return;
+  e.preventDefault();
+  showPage(link.dataset.page, { hash: link.dataset.hash || '' });
+});
+window.addEventListener('popstate', () => {
+  const pageId = pageFromUrl(currentContent);
+  if (pageId === currentPageId) return;
+  showPage(pageId, { push: false, hash: hashName(window.location.hash) });
+});
+
+window.SitePages = {
+  list: pagesOf,
+  current: () => currentPageId,
+  show: (pageId) => showPage(pageId),
+  href: (pageId) => pageHref(pagesOf(currentContent).find((pg) => pg.id === pageId) || null),
+};
+
 // The menu label: its own label, else the standard one, else its title
 function sectionNavText(content, id) {
   const set = sectionSettings(content, id);
   if (set.nav && set.nav.trim()) return set.nav.trim();
   if (SECTION_TEXT[id] && SECTION_TEXT[id].nav) return t(SECTION_TEXT[id].nav);
   if (SECTION_TEXT[id]) return t(SECTION_TEXT[id].title);
+  if (id === 'hero') return '';
   return (set.title || '').trim() || (set.kind === 'grid' ? t('work.title') : '');
 }
 
@@ -1746,8 +1831,8 @@ const SECTION_BODIES = {
       const who = el('figcaption', 'quote-person');
       if (item.photo) who.appendChild(picture(item.photo, '', 'quote-photo'));
       const names = el('span', 'quote-names');
-      if (item.name) names.appendChild(field(el('strong', null, item.name), `${path}.items.${n}.name`));
-      if (item.role) names.appendChild(field(el('span', null, item.role), `${path}.items.${n}.role`));
+      if (item.name || isEditing()) names.appendChild(blankable(el('strong', null, item.name), `${path}.items.${n}.name`, 'Name'));
+      if (item.role || isEditing()) names.appendChild(blankable(el('span', null, item.role), `${path}.items.${n}.role`, 'Role or company'));
       who.appendChild(names);
       card.append(quote, who);
       grid.appendChild(card);
@@ -1908,15 +1993,32 @@ function applySections(content) {
   const langs = nav.querySelector('.nav-langs');
   nav.querySelectorAll(':scope > a').forEach((link) => link.remove());
   anchorTargets = {};
-  order.forEach((id) => {
-    const href = `#${sectionLink(content, id)}`;
+  // The home page's sections (from another page they lead back to the home page), then the other pages
+  const home = currentPageId ? sectionOrder(content, '') : order;
+  if (currentPageId) order.forEach((id) => sectionLink(content, id));
+  home.forEach((id) => {
+    const name = sectionLink(content, id);
     const text = sectionNavText(content, id);
     const set = sectionSettings(content, id);
     if (!set.inMenu || !text) return;
     const link = el('a', set.device === 'all' ? null : `only-${set.device}`, text);
-    link.href = href;
+    link.href = currentPageId ? `${homeHref()}#${name}` : `#${name}`;
+    if (currentPageId) Object.assign(link.dataset, { page: '', hash: name });
     nav.insertBefore(link, langs);
   });
+  pagesOf(content).forEach((page) => {
+    if (page.inMenu === false) return;
+    const link = el('a', page.id === currentPageId ? 'is-current' : null, (page.nav || '').trim() || (page.title || '').trim() || page.slug);
+    link.href = pageHref(page);
+    link.dataset.page = page.id;
+    if (page.id === currentPageId) link.setAttribute('aria-current', 'page');
+    nav.insertBefore(link, langs);
+  });
+  // The logo leads home
+  const logo = document.querySelector('[data-site="logo"]');
+  logo.href = currentPageId ? homeHref() : '#top';
+  if (currentPageId) logo.dataset.page = '';
+  else delete logo.dataset.page;
 }
 
 // ---------- Blocks: the parts of a section ----------
@@ -1990,6 +2092,12 @@ function applySectionLook(content) {
   sectionOrder(content).forEach((id) => {
     const section = document.getElementById(id);
     if (!section) return;
+    // The top section has its own look; the section after it starts fresh (it fades into it)
+    if (id === 'hero') {
+      previous = null;
+      first = true;
+      return;
+    }
     const set = sectionSettings(content, id);
     const custom = set.background === 'custom';
     const image = custom && set.bgImage ? assetUrl(set.bgImage) : '';
@@ -2020,29 +2128,44 @@ function applySectionLook(content) {
   });
 }
 
-// The top section fades into whichever section comes first
+// The top section fades into whichever section comes after it (or the footer)
 function matchHeroFade() {
-  const first = sectionOrder(currentContent).map((id) => document.getElementById(id))
+  const order = sectionOrder(currentContent);
+  const after = order.slice(order.indexOf('hero') + 1).map((id) => document.getElementById(id))
     .find((s) => s && !s.classList.contains('is-removed'));
   const hero = document.querySelector('.hero');
-  if (first) hero.style.setProperty('--after-hero', getComputedStyle(first).backgroundColor);
+  const next = after || document.querySelector('.site-footer');
+  if (next) hero.style.setProperty('--after-hero', getComputedStyle(next).backgroundColor);
 }
 
 let currentContent = {};
 
+let pageChecked = false;
+
 // Takes the full content (all languages) and shows it in the current language
 function renderSite(fullContent) {
   currentContent = fullContent;
+  if (!pageChecked) {
+    pageChecked = true;
+    currentPageId = pageFromUrl(fullContent);
+  }
+  // A page that no longer exists (deleted, or undone): back to the home page
+  if (currentPageId && !pagesOf(fullContent).some((pg) => pg.id === currentPageId)) currentPageId = '';
   updateLanguages(fullContent);
   const content = localize(fullContent);
   categories = Array.isArray(content.categories) && content.categories.length ? content.categories : DEFAULT_CATEGORIES;
   applyTheme(content.theme);
   applyCursor(content.theme && content.theme.cursor);
   renderIdentity(content.site || {}, content.theme);
+  const page = pagesOf(content).find((pg) => pg.id === currentPageId);
+  if (page && (page.title || '').trim()) document.title = `${page.title.trim()} · ${document.title}`;
   workItems = content.work || [];
   renderCustomSections(content);
   renderExtraGrids(content.workGrids || []);
   applySections(content);
+  // How the contact form sends, and the line under it that says so
+  formSettings = { service: '', key: '', ...(fullContent.contactForm || {}) };
+  document.querySelector('.form-note').dataset.i18n = formService() ? 'contact.noteDirect' : 'contact.note';
   applyUiText(document);
   renderTexts(content);
   renderHeroMedia(content.hero || {});
@@ -2068,21 +2191,81 @@ function renderSite(fullContent) {
 // Exposed so the admin panel can live-preview edits
 window.renderSite = renderSite;
 
-// Contact form -> mailto (address comes from links.email in content/site.js)
+// ---------- Contact form ----------
+// content.contactForm = { service: "web3forms" | "formspree" | "", key }. With a service, the message is
+// sent from the page (the service emails it to you); without one, sending opens the visitor's email app
+// with the message filled in (to links.email). If sending fails, the visitor can still send it by email.
+// admin: Site tab, Links.
 const contactForm = document.getElementById('contact-form');
+const formStatus = document.getElementById('form-status');
+let formSettings = { service: '', key: '' };
 
-contactForm.addEventListener('submit', (e) => {
+const FORM_SERVICES = {
+  web3forms: (key, f) => ['https://api.web3forms.com/submit', {
+    access_key: key, name: f.name, email: f.email, subject: f.subject || `${siteName}: new message`, message: f.message, from_name: f.name,
+  }],
+  formspree: (key, f) => [`https://formspree.io/f/${encodeURIComponent(key)}`, {
+    name: f.name, email: f.email, _subject: f.subject || `${siteName}: new message`, message: f.message,
+  }],
+};
+
+const formService = () => (FORM_SERVICES[formSettings.service] && String(formSettings.key || '').trim() ? formSettings.service : '');
+
+function mailtoFor(f) {
+  const body = `${f.message}\n\nFrom: ${f.name} (${f.email})`;
+  return `mailto:${contactEmail}?subject=${encodeURIComponent(f.subject)}&body=${encodeURIComponent(body)}`;
+}
+
+function showFormStatus(text, kind, mailto) {
+  formStatus.hidden = false;
+  formStatus.className = `form-status is-${kind}`;
+  formStatus.textContent = text;
+  if (mailto && contactEmail) {
+    const link = el('a', null, t('contact.failedEmail'));
+    link.href = mailto;
+    formStatus.append(' ', link);
+  }
+}
+
+// Sends one message through the service set; throws if it doesn't arrive. Used by the admin panel's test too.
+async function sendMessage(f, settings = formSettings) {
+  const [url, data] = FORM_SERVICES[settings.service](String(settings.key).trim(), f);
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || result.success === false) throw new Error(result.message || (result.errors && result.errors[0] && result.errors[0].message) || response.statusText);
+}
+window.SiteContact = { send: sendMessage };
+
+contactForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-
-  const name = document.getElementById('name').value.trim();
-  const email = document.getElementById('email').value.trim();
-  const subject = document.getElementById('subject').value.trim();
-  const message = document.getElementById('message').value.trim();
-
-  const body = `${message}\n\nFrom: ${name} (${email})`;
-  const mailtoUrl = `mailto:${contactEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-
-  window.location.href = mailtoUrl;
+  const value = (id) => document.getElementById(id).value.trim();
+  const f = { name: value('name'), email: value('email'), subject: value('subject'), message: value('message') };
+  if (!formService()) {
+    window.location.href = mailtoFor(f);
+    return;
+  }
+  // Filled in by a robot: act as if it was sent
+  if (value('website')) {
+    contactForm.reset();
+    showFormStatus(t('contact.sent'), 'ok');
+    return;
+  }
+  const button = contactForm.querySelector('button[type="submit"]');
+  button.disabled = true;
+  showFormStatus(t('contact.sending'), 'busy');
+  try {
+    await sendMessage(f);
+    contactForm.reset();
+    showFormStatus(t('contact.sent'), 'ok');
+  } catch {
+    showFormStatus(t('contact.failed'), 'error', mailtoFor(f));
+  } finally {
+    button.disabled = false;
+  }
 });
 
 // Project detail modal

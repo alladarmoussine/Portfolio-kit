@@ -1,9 +1,9 @@
 {
   "kit": "alladarmoussine/portfolio-kit",
   "source": "alladarmoussine/AlladarMoussineSite",
-  "build": 14,
+  "build": 15,
   "date": "2026-10-26",
-  "commit": "25e450a",
+  "commit": "5382f28",
   "files": [
     ".gitattributes",
     "README.md",
@@ -16,6 +16,11 @@
     "starter/site.js"
   ],
   "notes": [
+    {
+      "build": 15,
+      "date": "2026-10-26",
+      "message": "Merge remote-tracking branch 'origin/dev'"
+    },
     {
       "build": 14,
       "date": "2026-10-26",
