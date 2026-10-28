@@ -1410,7 +1410,6 @@ let modeSet = { switchable: false, main: 'dark', look: 'icon' };
 const MODE_LOOKS = ['icon', 'label', 'switch']; // the button: a sun or moon, the same with a word, or a sliding switch
 let previewMode = ''; // the admin panel showing the version being edited
 let lookContent = null; // what the sections' backgrounds were last drawn from
-let fadeTimer = 0;
 
 function chosenMode() {
   try {
@@ -1443,24 +1442,35 @@ function showModeOnPage() {
   modeButton.title = label;
 }
 
-// Switching: the colours fade over, and the sections' own backgrounds follow
-function switchMode() {
-  if (!prefersStill) {
-    document.documentElement.classList.add('mode-fade');
-    clearTimeout(fadeTimer);
-    fadeTimer = setTimeout(() => document.documentElement.classList.remove('mode-fade'), 450);
+// Switching: the version's colours, and the sections' own backgrounds follow. `smooth`: the browser
+// cross-fades the whole page as one picture (a view transition), so everything fades together, gradients
+// and video too, in one step on the graphics card. Fading each colour by itself would start hundreds of
+// fades that repaint the page every frame, and gradients can't fade. Browsers without view transitions,
+// and visitors who reduce motion, switch at once; so do the panel's previews.
+function switchMode(smooth) {
+  const apply = () => {
+    showModeOnPage();
+    if (lookContent) applySectionLook(lookContent);
+    matchHeroFade();
+  };
+  if (!smooth || prefersStill || !document.startViewTransition) {
+    apply();
+    return;
   }
-  showModeOnPage();
-  if (lookContent) applySectionLook(lookContent);
-  matchHeroFade();
+  const root = document.documentElement;
+  root.classList.add('mode-switching');
+  const fade = document.startViewTransition(apply);
+  // Clicked again before it ended: the new one takes over (the switch itself still happens)
+  fade.ready.catch(() => {});
+  fade.finished.finally(() => root.classList.remove('mode-switching'));
 }
 
 modeButton.addEventListener('click', () => {
   try { localStorage.setItem(MODE_KEY, shownMode() === 'dark' ? 'light' : 'dark'); } catch { /* storage blocked: this visit only */ }
   previewMode = '';
-  switchMode();
+  switchMode(true);
 });
-prefersLight.addEventListener('change', () => { if (modeSet.switchable && !chosenMode() && !previewMode) switchMode(); });
+prefersLight.addEventListener('change', () => { if (modeSet.switchable && !chosenMode() && !previewMode) switchMode(true); });
 
 // Used by the admin panel (Theme tab, and writing these into index.html on save)
 // apply() restyles the page at once without rebuilding it: colours, corners, fonts and the mouse effect
