@@ -58,8 +58,9 @@ in over the page. Press it again or click × to close it.
 
 **Setup wizard:** on a fresh copy (the name is still empty or "Your Name"), unlocking the panel
 opens seven short steps: name and intro, a look, the top-section style, the kinds of work (which
-become the categories), contact details and languages. The look step has the Theme tab's colours
-and fonts (schemes, colour swatches, Dark / Light, font samples, your own fonts). The page behind
+become the categories), contact details and languages. The look step asks **Dark, Light or
+Both** (big cards), then has the Theme tab's colours and fonts (schemes, colour swatches, font
+samples, your own fonts). The page behind
 shows the result as you go; nothing is published until Save & publish. Each step can be skipped, and the Site tab has
 **Run setup again**.
 
@@ -94,7 +95,10 @@ again with a new GitHub token; nothing on the site is lost either way.
   menu label, "show in the menu", a **link name** (e.g. `services`, so the section's address ends
   in `#services` instead of its code name), which page it's on, and duplicate or delete. Under
   **Layout**, its look: background (page, second, or your own colour or picture, with the text
-  turning light or dark to read on it), title style and size (*large* with a dot, or *small*
+  turning light or dark to read on it; with both versions for visitors, a ☾ and a ☀ colour, the
+  second made from the first until changed (`bgColorOther`), and for a picture **In the light
+  version: Keep it dark / Lighten it** (`bgOther`) with an optional second picture
+  (`bgImageOther`)), title style and size (*large* with a dot, or *small*
   with an accent line), width (narrow, normal, wide, full), space around (compact, normal,
   roomy) and **Show on** (all screens, computers only, phones only; its menu link follows). A
   small-titled section on the same background as the one above sits right under it as part of
@@ -159,9 +163,16 @@ again with a new GitHub token; nothing on the site is lost either way.
   light) and your saved schemes: hover one to see it on the page, click to keep it. Below are the
   four main colours (background, text, two accents) and, under **More colours**, the rest
   (sections, cards, lines, soft text, text on buttons, the top section's background and text).
-  The page recolours while a colour is dragged. **Dark / Light** swaps the backgrounds and text
-  and keeps the accents; the top section stays dark on light themes so its text reads on photos
-  and video. Colours changed by hand show as a **Your edits** chip, kept when you try another
+  The page recolours while a colour is dragged. **Visitors see: ☾ Dark / ☀ Light / ◐ Both**.
+  Dark or Light is one version (switching makes the other version of the scheme). With **Both**
+  (`theme.switchable`), visitors first see the version their device prefers, and a ☾/☀ button in
+  the menu bar switches; the browser remembers it, and a line at the top of `index.html` applies a
+  remembered choice before the page shows, so it doesn't flash. The second version is made from
+  the first in the same tint, with the accents made lighter or darker until they read on its
+  background; a ☾ Dark and a ☀ Light row of colours fine-tune each (the second's changes are
+  `theme.other`), and the page shows the version last touched. Turning on Both lists the sections
+  with their own background, to check. The top section stays dark in both versions so its text
+  reads on photos and video. Colours changed by hand show as a **Your edits** chip, kept when you try another
   scheme; **+ Save** names them as a scheme (stored as `theme.saved`, so they're there on every
   computer), and ↺ goes back to the scheme's own colours. Also the text and heading fonts, each shown
   written in itself to pick from (a Google Fonts list, plus your own under **+ Your own font**:

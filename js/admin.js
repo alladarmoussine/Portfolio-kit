@@ -215,6 +215,9 @@
     c.theme.cursor = { ...(window.CURSOR_DEFAULTS || {}), ...(c.theme.cursor || {}) };
     c.theme.saved = (Array.isArray(c.theme.saved) ? c.theme.saved : []).map((scheme) => ({ name: '', preset: 'midnight', ...scheme, colors: { ...((scheme && scheme.colors) || {}) } }));
     c.theme.titleDot = c.theme.titleDot !== false;
+    // Dark and light for visitors: theme.other holds the second version's own changes
+    c.theme.switchable = Boolean(c.theme.switchable);
+    c.theme.other = c.theme.other && typeof c.theme.other === 'object' ? c.theme.other : {};
     c.theme.customFonts = (c.theme.customFonts || []).map((f) => ({ name: '', file: '', weight: 'auto', style: 'normal', ...f }));
     c.customSections = (c.customSections || []).map(normalizeSection);
     c.workGrids = (c.workGrids || []).map((grid) => ({ intro: '', ...grid }));
@@ -405,7 +408,7 @@
       (sec.images || []).forEach((img) => paths.add(img.src));
       (sec.items || []).forEach((item) => { paths.add(item.photo); paths.add(item.src); });
     });
-    Object.values(content.sections).forEach((set) => paths.add(set && set.bgImage));
+    Object.values(content.sections).forEach((set) => { paths.add(set && set.bgImage); paths.add(set && set.bgImageOther); });
     content.work.forEach((item) => {
       paths.add(item.thumb);
       item.videos.forEach((clip) => { paths.add(clip.video); paths.add(clip.thumb); });
@@ -749,6 +752,7 @@
     stopEditing();
     previewing = false;
     document.documentElement.classList.remove('adm-editing', 'adm-previewing');
+    window.SiteTheme.showMode(''); // the version this visitor sees, not the one last edited
     document.querySelectorAll(`${CHROME}, .adm-preview-pill`).forEach((node) => node.remove());
     document.querySelectorAll('[data-adm-row]').forEach((node) => {
       node.classList.remove('adm-selected');
@@ -2352,7 +2356,20 @@
       title: 'Pick a look',
       help: 'Hover a colour scheme to try it on the page, click to keep it, then change any colour or font. All of it stays in the Theme tab.',
       // The same colours and fonts as the Theme tab (with schemes and fonts saved there)
-      body: () => h('div', { class: 'adm-form' }, coloursBox(state.draft.theme), fontsBox(state.draft.theme)),
+      body: () => {
+        const theme = state.draft.theme;
+        const current = theme.switchable ? 'both' : window.SiteTheme.colors(theme).mode;
+        return h('div', { class: 'adm-form' },
+          h('span', { class: 'adm-label', text: 'How should your site look?' }),
+          wizardChoice([
+            ['dark', '\u263E Dark', 'Dark backgrounds, light text.'],
+            ['light', '\u2600 Light', 'Light backgrounds, dark text.'],
+            ['both', '\u25D0 Both', 'Follows each visitor\u2019s device, with a \u263E/\u2600 switch in the menu.'],
+          ], current, (value) => { setVisitors(theme, value); redraw(); }),
+          theme.switchable ? h('p', { class: 'adm-hint', text: 'Use the \u263E/\u2600 button in the menu to see the other version on the page.' }) : null,
+          coloursBox(theme, true),
+          fontsBox(theme));
+      },
     },
     {
       title: 'The top of your page',
@@ -3384,20 +3401,37 @@
     ['heroBg', 'Top background', 'Top section background'],
     ['heroText', 'Top text', 'Top section text'],
   ];
-  // Colours that change when switching between light and dark (the accents stay)
-  const NEUTRAL_COLORS = ['bg', 'bgAlt', 'surface', 'border', 'text', 'textDim', 'heroBg'];
-
   const isHex = (value) => /^#[0-9a-f]{6}$/i.test(value || '');
+  const otherMode = (mode) => (mode === 'light' ? 'dark' : 'light');
+  const MODE_NAMES = { dark: '\u263E Dark', light: '\u2600 Light' };
 
-  // Light or dark: swap the backgrounds and text for the chosen preset's (or a matching one), keep the accents
-  function switchMode(theme, mode) {
-    const T = window.SiteTheme;
-    const own = T.presets[theme.preset];
-    const base = own && (own.mode || 'dark') === mode ? own : T.presets[mode === 'light' ? 'paper' : 'midnight'];
-    NEUTRAL_COLORS.forEach((key) => { theme.colors[key] = base[key] || base.bg; });
-    delete theme.colors.heroText;
-    theme.colors.mode = mode;
+  // The other version becomes the only one (e.g. "Visitors see: Light" on a dark scheme): its colours,
+  // made to match the scheme (see otherVersion in js/main.js) with any changes made to it, become the theme's
+  function useOtherVersion(theme) {
+    const other = window.SiteTheme.colors(theme, 'other');
+    const keys = [...MAIN_COLORS, ...MORE_COLORS].map(([key]) => key).filter((key) => key !== 'heroText' && isHex(other[key]));
+    theme.colors = { ...Object.fromEntries(keys.map((key) => [key, other[key]])), mode: other.mode };
+    if (theme.other.heroText) theme.colors.heroText = theme.other.heroText;
+    theme.other = {};
   }
+
+  // "Visitors see": 'dark', 'light' or 'both'
+  function setVisitors(theme, value) {
+    const main = window.SiteTheme.colors(theme).mode;
+    if (value === 'both') theme.switchable = true;
+    else {
+      if (value !== main) useOtherVersion(theme);
+      theme.switchable = false;
+    }
+    window.SiteTheme.showMode('');
+    window.SiteTheme.apply(theme);
+  }
+
+  // Sections with their own background colour or picture, which have a second version to check
+  function ownBackgrounds() {
+    return [...new Set(allOrders().flat())].filter((id) => (state.draft.sections[id] || {}).background === 'custom');
+  }
+  let backgroundsNote = null; // after "Both" is picked in the Theme tab: those sections, to look at
 
   // The colours and fonts are shown in the Theme tab and in the setup wizard: redraw whichever is open
   let wizardStep = null; // the setup step showing, or null
@@ -3414,10 +3448,10 @@
   // ---------- Saved colour schemes ----------
   // theme.saved = [{ name, preset, colors }]: colour combinations kept to switch back to, stored with the
   // site's content so they're there on every computer
-  const schemeKey = (scheme) => JSON.stringify({ preset: scheme.preset, colors: scheme.colors || {} });
-  const currentScheme = (theme) => ({ preset: theme.preset, colors: { ...theme.colors } });
+  const schemeKey = (scheme) => JSON.stringify({ preset: scheme.preset, colors: scheme.colors || {}, other: scheme.other || {} });
+  const currentScheme = (theme) => ({ preset: theme.preset, colors: { ...theme.colors }, other: { ...theme.other } });
 
-  const hasOwnColours = (theme) => Object.keys(theme.colors).some((key) => key !== 'mode');
+  const hasOwnColours = (theme) => Object.keys(theme.colors).some((key) => key !== 'mode') || Object.keys(theme.other).length > 0;
   const isSaved = (theme, scheme) => theme.saved.some((s) => schemeKey(s) === schemeKey(scheme));
 
   // Hand-made colours that aren't a saved scheme: picking another scheme keeps them here, as the
@@ -3430,6 +3464,7 @@
     if (hasOwnColours(theme) && !isSaved(theme, now)) looseEdits = now;
     theme.preset = scheme.preset;
     theme.colors = { ...(scheme.colors || {}) };
+    theme.other = { ...(scheme.other || {}) };
     window.SiteTheme.apply(theme);
   }
 
@@ -3460,7 +3495,7 @@
           type: 'button',
           title,
           'aria-pressed': String(isActive),
-          onmouseenter: () => { if (!isActive) T.apply({ ...theme, preset: scheme.preset, colors: { ...(scheme.colors || {}) } }); },
+          onmouseenter: () => { if (!isActive) T.apply({ ...theme, preset: scheme.preset, colors: { ...(scheme.colors || {}) }, other: { ...(scheme.other || {}) } }); },
           onmouseleave: () => T.apply(state.draft.theme),
           onclick: () => { if (!isActive) onPick(scheme); },
         },
@@ -3512,54 +3547,97 @@
   }
 
   // One colour: a round swatch that opens the colour picker. The page follows while it's dragged and
-  // is redrawn once it's let go.
-  function colourSwatch(theme, colors, [key, label, title]) {
+  // is redrawn once it's let go. target: where the change goes (theme.colors, or theme.other for the second
+  // version); with both versions, touching one shows its version on the page.
+  function colourSwatch(target, colors, [key, label, title], mode) {
+    const T = window.SiteTheme;
     const fallback = key === 'heroText' ? colors.heroText || (colors.mode === 'light' ? '#f5f6f8' : colors.text) : '#000000';
     const value = isHex(colors[key]) ? colors[key] : isHex(fallback) ? fallback : '#000000';
+    const show = () => { if (state.draft.theme.switchable) T.showMode(mode); };
     return h('label', { class: 'adm-color', title },
       h('input', {
         type: 'color',
         value,
-        oninput: (e) => { theme.colors[key] = e.target.value; window.SiteTheme.apply(theme); scheduleHistory(); },
+        onclick: show,
+        oninput: (e) => { target[key] = e.target.value; show(); T.apply(state.draft.theme); scheduleHistory(); },
         onchange: () => redraw(),
       }),
       h('span', { text: label }));
   }
 
-  function coloursBox(theme) {
+  // One version's colours: the main four, and the rest folded
+  function colourRow(theme, mode, named) {
     const T = window.SiteTheme;
-    const colors = T.colors(theme);
-    const mode = colors.mode === 'light' ? 'light' : 'dark';
-    const modeButton = (value, label) => h('button', {
-      class: `adm-seg${mode === value ? ' is-active' : ''}`,
+    const isMain = mode === T.colors(theme).mode;
+    const colors = T.colors(theme, isMain ? 'main' : 'other');
+    const target = isMain ? theme.colors : theme.other;
+    const fold = `moreColours-${mode}`;
+    return h('div', { class: 'adm-version' },
+      named ? h('span', { class: 'adm-version-name', text: MODE_NAMES[mode] }) : null,
+      h('div', { class: 'adm-colors' }, MAIN_COLORS.map((spec) => colourSwatch(target, colors, spec, mode))),
+      h('details', {
+        class: 'adm-more-colours',
+        open: Boolean(foldOpen[fold]),
+        ontoggle: (e) => { foldOpen[fold] = e.currentTarget.open; },
+      },
+      h('summary', { text: 'More colours' }),
+      h('div', { class: 'adm-colors' }, MORE_COLORS.map((spec) => colourSwatch(target, colors, spec, mode)))));
+  }
+
+  // `setup`: in the setup wizard, which asks "Dark, light or both?" with big cards above it instead
+  function coloursBox(theme, setup) {
+    const T = window.SiteTheme;
+    const main = T.colors(theme).mode;
+    const visitors = theme.switchable ? 'both' : main;
+    const visitorsButton = (value, label) => h('button', {
+      class: `adm-seg${visitors === value ? ' is-active' : ''}`,
       type: 'button',
-      'aria-pressed': String(mode === value),
+      'aria-pressed': String(visitors === value),
       text: label,
       onclick: () => {
-        if (mode === value) return;
-        switchMode(theme, value);
-        T.apply(theme);
+        if (visitors === value) return;
+        setVisitors(theme, value);
+        backgroundsNote = value === 'both' ? ownBackgrounds() : null;
         redraw();
       },
     });
+    const rows = theme.switchable ? ['dark', 'light'].map((mode) => colourRow(theme, mode, true)) : [colourRow(theme, main, false)];
     return h('div', { class: 'adm-form adm-group-box', 'data-adm-section': 'colours' },
       h('div', { class: 'adm-colours-head' },
         h('h3', { class: 'adm-group', text: 'Colours' }),
-        h('div', { class: 'adm-segs', title: 'Switches the backgrounds and text; the accents stay. The top section keeps a dark background either way, so its text reads on photos and video.' },
-          modeButton('dark', 'Dark'), modeButton('light', 'Light')),
         hasOwnColours(theme) ? iconBtn('\u21BA', 'Back to the scheme\u2019s own colours', () => {
-          useScheme(theme, { preset: theme.preset, colors: {} });
+          useScheme(theme, { preset: theme.preset, colors: {}, other: {} });
           redraw();
         }) : null),
+      setup ? null : h('div', { class: 'adm-visitors' },
+        h('span', { class: 'adm-label', text: 'Visitors see' }),
+        h('div', { class: 'adm-segs', title: 'Both: each visitor first sees the version their device prefers, and a \u263E/\u2600 button in the menu switches. The top section stays dark in both, so its text reads on photos and video.' },
+          visitorsButton('dark', MODE_NAMES.dark), visitorsButton('light', MODE_NAMES.light), visitorsButton('both', '\u25D0 Both'))),
+      !setup && theme.switchable && backgroundsNote && backgroundsNote.length ? backgroundsTip(theme) : null,
       schemeChips(theme, (scheme) => { useScheme(theme, scheme); redraw(); }, true),
-      h('div', { class: 'adm-colors' }, MAIN_COLORS.map((spec) => colourSwatch(theme, colors, spec))),
-      h('details', {
-        class: 'adm-more-colours',
-        open: Boolean(foldOpen.moreColours),
-        ontoggle: (e) => { foldOpen.moreColours = e.currentTarget.open; },
+      ...rows,
+      theme.switchable ? h('p', { class: 'adm-hint', text: 'A scheme sets both versions; the second is made to match. Change a colour in either row, and the page shows that version while you do.' }) : null);
+  }
+
+  // After turning on both versions: sections with their own background, each a click away
+  function backgroundsTip(theme) {
+    const other = otherMode(window.SiteTheme.colors(theme).mode);
+    const names = backgroundsNote.map((id) => h('button', {
+      class: 'adm-link',
+      type: 'button',
+      text: sectionLabel(id),
+      onclick: () => {
+        // Its row, on the Layout tab (where its background is), with the page showing that version
+        backgroundsNote = null;
+        window.SiteTheme.showMode(other);
+        state.rowTab = 'layout';
+        selectSection(id, { reveal: true });
       },
-      h('summary', { text: 'More colours' }),
-      h('div', { class: 'adm-colors' }, MORE_COLORS.map((spec) => colourSwatch(theme, colors, spec)))));
+    }));
+    return h('div', { class: 'adm-note adm-backgrounds-tip' },
+      h('span', { text: `${backgroundsNote.length === 1 ? 'This section has its own background' : 'These sections have their own background'}. Check how ${backgroundsNote.length === 1 ? 'it looks' : 'they look'} in the ${other} version: ` }),
+      ...names.flatMap((name, i) => (i ? [', ', name] : [name])),
+      h('button', { class: 'adm-icon', type: 'button', text: '\u2715', title: 'Close', 'aria-label': 'Close', onclick: () => { backgroundsNote = null; redraw(); } }));
   }
 
   // ---------- Uploaded fonts ----------
@@ -4159,18 +4237,58 @@
         partsBox(id)));
   }
 
+  // With both versions (dark and light for visitors), the colour has one for each, the second made from the
+  // first until it's changed; a picture can stay dark in the light version or be lightened, or have its own
+  const otherPictureOpen = new Set();
+
   function customBackground(id, set) {
+    const T = window.SiteTheme;
+    const theme = state.draft.theme;
+    const main = T.colors(theme).mode;
+    const other = otherMode(main);
+    const colour = isHex(set.bgColor) ? set.bgColor : '#1d2633';
+    const circle = (mode) => {
+      const isMain = mode === main;
+      const value = isMain ? colour : isHex(set.bgColorOther) ? set.bgColorOther : T.otherBackground(colour, other);
+      return h('label', { class: 'adm-color', title: `${mode === 'dark' ? 'Dark' : 'Light'} version` },
+        h('input', {
+          type: 'color',
+          value,
+          onclick: () => T.showMode(mode),
+          oninput: (e) => {
+            if (isMain) set.bgColor = e.target.value;
+            else set.bgColorOther = e.target.value;
+            T.showMode(mode);
+            changed();
+          },
+          onchange: () => rerenderTab(),
+        }),
+        h('span', { text: MODE_NAMES[mode] }));
+    };
+    const picture = (file, key) => {
+      const path = stageFile(file, `assets/sections/bg-${slug(sectionLabel(id))}-${Date.now().toString(36)}${extension(file)}`);
+      if (path) { set[key] = path; rerenderTab(); }
+    };
+    const lightChoice = theme.switchable && other === 'light' && set.bgImage;
     return h('div', { class: 'adm-form' },
       h('div', { class: 'adm-field' },
         h('span', { class: 'adm-label', text: 'Colour' }),
-        h('div', { class: 'adm-inline' },
-          h('input', { type: 'color', value: isHex(set.bgColor) ? set.bgColor : '#1d2633', oninput: (e) => { set.bgColor = e.target.value; changed(); } }),
-          h('span', { class: 'adm-hint', text: 'The text turns light or dark to read on it.' }))),
-      fileField('Picture (optional)', set.bgImage, 'image/*', (file) => {
-        const path = stageFile(file, `assets/sections/bg-${slug(sectionLabel(id))}-${Date.now().toString(36)}${extension(file)}`);
-        if (path) { set.bgImage = path; rerenderTab(); }
-      }, () => { set.bgImage = ''; rerenderTab(); }, 'Covers the whole section, darkened so light text reads on it.'),
-      set.bgImage ? slider(set, 'bgDarken', 'Darken the picture', 0, 90, 5, '%') : null);
+        theme.switchable
+          ? h('div', { class: 'adm-inline adm-bg-versions' }, circle('dark'), circle('light'),
+            isHex(set.bgColorOther) ? h('button', { class: 'adm-link', type: 'button', text: `Make the ${other} one match again`, onclick: () => { delete set.bgColorOther; rerenderTab(); } }) : null)
+          : h('div', { class: 'adm-inline' },
+            h('input', { type: 'color', value: colour, oninput: (e) => { set.bgColor = e.target.value; changed(); } }),
+            h('span', { class: 'adm-hint', text: 'The text turns light or dark to read on it.' })),
+        theme.switchable ? h('span', { class: 'adm-hint', text: `The ${other} one is made from the ${main} one until you change it. The text turns light or dark to read on each.` }) : null),
+      fileField('Picture (optional)', set.bgImage, 'image/*', (file) => picture(file, 'bgImage'),
+        () => { set.bgImage = ''; delete set.bgImageOther; rerenderTab(); }, 'Covers the whole section, darkened so light text reads on it.'),
+      set.bgImage ? slider(set, 'bgDarken', lightChoice && set.bgOther === 'light' ? 'Darken (or, in light, lighten) the picture' : 'Darken the picture', 0, 90, 5, '%') : null,
+      lightChoice ? choice(set, 'bgOther', 'In the light version', [['dark', 'Keep it dark'], ['light', 'Lighten it']],
+        'Lightened, the picture gets a white veil and the text turns dark.') : null,
+      lightChoice && (set.bgImageOther || otherPictureOpen.has(id))
+        ? fileField('Picture for the light version', set.bgImageOther, 'image/*', (file) => picture(file, 'bgImageOther'),
+          () => { delete set.bgImageOther; otherPictureOpen.delete(id); rerenderTab(); })
+        : lightChoice ? h('div', null, h('button', { class: 'adm-link', type: 'button', text: 'Use a different picture for the light version', onclick: () => { otherPictureOpen.add(id); rerenderTab(); } })) : null);
   }
 
   function fileField(label, path, accept, onPick, onRemove, hint, section) {

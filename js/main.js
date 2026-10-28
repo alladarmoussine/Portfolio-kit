@@ -1211,8 +1211,10 @@ const THEME_FONTS = {
   'System font': null,
 };
 
-// The theme's colours, with the admin's overrides on top of the preset
-function themeColors(theme) {
+// The theme's colours, with the admin's overrides on top of the preset. version "other": the second
+// version when visitors can switch between dark and light (theme.switchable): colours made from the first
+// (see otherVersion), with theme.other's own changes on top.
+function themeColors(theme, version) {
   const set = theme || {};
   const preset = THEME_PRESETS[set.preset] || THEME_PRESETS.midnight;
   const own = set.colors || {};
@@ -1220,7 +1222,93 @@ function themeColors(theme) {
   // A new accent without its own dark shade: mix one (used for card tiles)
   if (own.accent && !own.accentDark) colors.accentDark = `color-mix(in srgb, ${own.accent} 32%, #000)`;
   colors.heroBg = own.heroBg || preset.heroBg || colors.bg;
-  return colors;
+  colors.mode = colors.mode === 'light' ? 'light' : 'dark';
+  if (version !== 'other') return colors;
+  const mode = colors.mode === 'light' ? 'dark' : 'light';
+  const changes = Object.fromEntries(Object.entries(set.other || {}).filter(([, value]) => isHexColor(value)));
+  const out = { ...otherVersion(colors, mode), ...changes, mode };
+  if (changes.accent) out.accentDark = `color-mix(in srgb, ${changes.accent} 32%, #000)`;
+  return out;
+}
+
+// ---------- Colour maths (for the second version) ----------
+// OKLCH: lightness, colourfulness and hue as the eye sees them, so a colour can be made lighter or darker
+// without changing its hue
+const isHexColor = (value) => /^#[0-9a-f]{6}$/i.test(value || '');
+const hexRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+const toLinear = (v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+const fromLinear = (v) => (v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055);
+
+function hexToOklch(hex) {
+  const [r, g, b] = hexRgb(hex).map(toLinear);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  const a = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s;
+  const bb = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s;
+  return { L: 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s, c: Math.hypot(a, bb), h: Math.atan2(bb, a) };
+}
+
+// Less colourful until it fits what screens can show
+function oklchToHex(L, c, h) {
+  for (let k = c; ; k *= 0.9) {
+    const a = k * Math.cos(h);
+    const b = k * Math.sin(h);
+    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+    const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+    const s = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+    const rgb = [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+      -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s];
+    if (rgb.every((v) => v >= -0.001 && v <= 1.001) || k < 0.001) {
+      return `#${rgb.map((v) => Math.round(fromLinear(Math.min(Math.max(v, 0), 1)) * 255).toString(16).padStart(2, '0')).join('')}`;
+    }
+  }
+}
+
+const luminance = (hex) => {
+  const [r, g, b] = hexRgb(hex).map(toLinear);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const contrast = (x, y) => {
+  const [a, b] = [luminance(x), luminance(y)].sort((p, q) => q - p);
+  return (a + 0.05) / (b + 0.05);
+};
+
+// A colour made lighter (on dark) or darker (on light), keeping its hue, until it reads on the background
+function readableOn(hex, bg, min) {
+  if (!isHexColor(hex) || !isHexColor(bg)) return hex;
+  const { L, c, h } = hexToOklch(hex);
+  const up = luminance(bg) < 0.2;
+  let out = hex;
+  for (let step = 1; step <= 50 && contrast(out, bg) < min; step++) out = oklchToHex(Math.min(Math.max(L + (up ? 0.02 : -0.02) * step, 0), 1), c, h);
+  return out;
+}
+
+// The other version of a set of colours: backgrounds and text in the same tint, the accents kept but made
+// readable on the new background. The top section stays as it is (a dark stage in both).
+function otherVersion(c, mode) {
+  const base = hexToOklch(isHexColor(c.bg) ? c.bg : '#000000');
+  const chroma = Math.min(base.c, 0.03);
+  const tone = (L, k = 1) => oklchToHex(L, chroma * k, base.h);
+  const neutrals = mode === 'light'
+    ? { bg: tone(0.975), bgAlt: tone(0.945), surface: tone(0.995, 0.3), border: tone(0.87), text: tone(0.22), textDim: tone(0.48) }
+    : { bg: tone(0.14), bgAlt: tone(0.17), surface: tone(0.205), border: tone(0.29), text: tone(0.96, 0.4), textDim: tone(0.72, 0.6) };
+  const accent = readableOn(c.accent, neutrals.bg, 3);
+  return {
+    ...neutrals,
+    accent,
+    accent2: readableOn(c.accent2, neutrals.bg, 3),
+    accentDark: `color-mix(in srgb, ${accent} 32%, #000)`,
+    onAccent: isHexColor(accent) && contrast(accent, '#ffffff') < contrast(accent, '#141414') ? '#141414' : '#ffffff',
+    heroBg: c.heroBg,
+  };
+}
+
+// A section's own background colour in the other version, unless one is set: same hue, light or dark
+function otherBackground(hex, mode) {
+  if (!isHexColor(hex)) return hex;
+  const { c, h } = hexToOklch(hex);
+  return oklchToHex(mode === 'light' ? 0.93 : 0.25, c * 0.6, h);
 }
 
 // Strips characters that could break out of a quoted CSS string
@@ -1253,26 +1341,39 @@ function customFontCss(theme, forFile) {
   }).join('');
 }
 
-function themeCss(theme, forFile) {
-  const set = theme || {};
-  const c = themeColors(set);
+// One version's colours as CSS variables
+function colourVars(c, heroText) {
   const dark = c.mode !== 'light';
   // The top section is always a dark stage: on a light theme it gets light text of its own,
   // unless the Theme tab sets one
   const hero = dark
     ? { text: c.text, dim: c.textDim, border: c.border }
     : { text: '#f5f6f8', dim: '#a3a9b3', border: '#2c313a' };
-  const own = set.colors || {};
-  if (own.heroText) {
-    hero.text = own.heroText;
-    hero.dim = `color-mix(in srgb, ${own.heroText} 62%, transparent)`;
+  if (heroText) {
+    hero.text = heroText;
+    hero.dim = `color-mix(in srgb, ${heroText} 62%, transparent)`;
   }
-  const radius = Math.min(Math.max(Number(set.radius ?? 14), 0), 32);
-  return `:root{--bg:${c.bg};--bg-alt:${c.bgAlt};--surface:${c.surface};--border:${c.border};--text:${c.text};--text-dim:${c.textDim};`
+  return `--bg:${c.bg};--bg-alt:${c.bgAlt};--surface:${c.surface};--border:${c.border};--text:${c.text};--text-dim:${c.textDim};`
     + `--accent:${c.accent};--accent-dark:${c.accentDark};--accent-orange:${c.accent2};--on-accent:${c.onAccent};`
     + `--hero-bg:${c.heroBg};--hero-text:${hero.text};--hero-text-dim:${hero.dim};--hero-border:${hero.border};`
-    + `--radius:${radius}px;--title-dot:${set.titleDot === false ? 'none' : '"."'};--font-body:${fontStack(set.font || 'Geologica')};--font-heading:${fontStack(set.headingFont || set.font || 'Geologica')};`
-    + `color-scheme:${dark ? 'dark' : 'light'}}${customFontCss(set, forFile)}`;
+    + `color-scheme:${dark ? 'dark' : 'light'};`;
+}
+
+// With both versions, the second applies when the page says so (data-mode, set by the ☾/☀ button or a
+// remembered choice), or, before that, when the visitor's device prefers it
+function themeCss(theme, forFile) {
+  const set = theme || {};
+  const main = themeColors(set);
+  const own = set.colors || {};
+  const radius = Math.min(Math.max(Number(set.radius ?? 14), 0), 32);
+  let css = `:root{${colourVars(main, own.heroText)}`
+    + `--radius:${radius}px;--title-dot:${set.titleDot === false ? 'none' : '"."'};--font-body:${fontStack(set.font || 'Geologica')};--font-heading:${fontStack(set.headingFont || set.font || 'Geologica')}}`;
+  if (set.switchable) {
+    const other = themeColors(set, 'other');
+    const vars = colourVars(other, (set.other || {}).heroText || own.heroText);
+    css += `:root[data-mode="${other.mode}"]{${vars}}@media (prefers-color-scheme: ${other.mode}){:root:not([data-mode="${main.mode}"]){${vars}}}`;
+  }
+  return css + customFontCss(set, forFile);
 }
 
 // Browser-tab icon: an uploaded image (site.favicon), else the initials in the accent colour.
@@ -1293,14 +1394,79 @@ function applyTheme(theme) {
   const fonts = document.getElementById('theme-fonts');
   const href = themeFontsHref(theme);
   if (fonts.getAttribute('href') !== href) fonts.setAttribute('href', href);
+  modeSet = { switchable: Boolean(theme && theme.switchable), main: themeColors(theme).mode };
+  showModeOnPage();
 }
+
+// ---------- Dark and light for visitors ----------
+// theme.switchable: the site has both versions. A visitor first sees the one their device prefers; the
+// ☾/☀ button in the menu switches, and this browser remembers it. A line at the top of index.html sets a
+// remembered choice before the page shows, so it doesn't flash the other version first.
+const MODE_KEY = 'site-mode';
+const prefersLight = window.matchMedia('(prefers-color-scheme: light)');
+// (an index.html from before the button gets a stand-in, so nothing breaks)
+const modeButton = document.getElementById('mode-toggle') || document.createElement('button');
+let modeSet = { switchable: false, main: 'dark' };
+let previewMode = ''; // the admin panel showing the version being edited
+let lookContent = null; // what the sections' backgrounds were last drawn from
+let fadeTimer = 0;
+
+function chosenMode() {
+  try {
+    const mode = localStorage.getItem(MODE_KEY);
+    return mode === 'light' || mode === 'dark' ? mode : '';
+  } catch {
+    return '';
+  }
+}
+
+function shownMode() {
+  if (!modeSet.switchable) return modeSet.main;
+  return previewMode || chosenMode() || (prefersLight.matches ? 'light' : 'dark');
+}
+
+// The page's data-mode (which version the colours use) and the button
+function showModeOnPage() {
+  const root = document.documentElement;
+  const mode = shownMode();
+  if (modeSet.switchable) root.dataset.mode = mode;
+  else delete root.dataset.mode;
+  modeButton.hidden = !modeSet.switchable;
+  modeButton.dataset.mode = mode;
+  const label = t(mode === 'dark' ? 'mode.toLight' : 'mode.toDark');
+  modeButton.setAttribute('aria-label', label);
+  modeButton.title = label;
+}
+
+// Switching: the colours fade over, and the sections' own backgrounds follow
+function switchMode() {
+  if (!prefersStill) {
+    document.documentElement.classList.add('mode-fade');
+    clearTimeout(fadeTimer);
+    fadeTimer = setTimeout(() => document.documentElement.classList.remove('mode-fade'), 450);
+  }
+  showModeOnPage();
+  if (lookContent) applySectionLook(lookContent);
+  matchHeroFade();
+}
+
+modeButton.addEventListener('click', () => {
+  try { localStorage.setItem(MODE_KEY, shownMode() === 'dark' ? 'light' : 'dark'); } catch { /* storage blocked: this visit only */ }
+  previewMode = '';
+  switchMode();
+});
+prefersLight.addEventListener('change', () => { if (modeSet.switchable && !chosenMode() && !previewMode) switchMode(); });
 
 // Used by the admin panel (Theme tab, and writing these into index.html on save)
 // apply() restyles the page at once without rebuilding it: colours, corners, fonts and the mouse effect
 // (the panel uses it while a colour or a Theme slider is dragged)
 window.SiteTheme = {
   presets: THEME_PRESETS, fonts: THEME_FONTS, colors: themeColors, css: themeCss, fontsHref: themeFontsHref, favicon: faviconHref,
-  apply: (theme) => { applyTheme(theme); applyCursor(theme && theme.cursor); matchHeroFade(); },
+  apply: (theme) => { applyTheme(theme); applyCursor(theme && theme.cursor); if (lookContent) applySectionLook(lookContent); matchHeroFade(); },
+  // The panel shows one version while it's edited ('' = the visitor's own again)
+  showMode: (mode) => { previewMode = mode || ''; switchMode(); },
+  shownMode: () => shownMode(),
+  otherBackground,
 };
 
 // ---------- Mouse effect (admin: Theme tab) ----------
@@ -2101,6 +2267,7 @@ function isLightColor(hex) {
 // Background, title style and size, width, spacing and devices of each section. A small-titled section on
 // the same background as the one above sits right under it, like a part of it (Experience and Toolkit under Work).
 function applySectionLook(content) {
+  lookContent = content;
   let previous = null;
   let first = true;
   sectionOrder(content).forEach((id) => {
@@ -2114,15 +2281,21 @@ function applySectionLook(content) {
     }
     const set = sectionSettings(content, id);
     const custom = set.background === 'custom';
-    const image = custom && set.bgImage ? assetUrl(set.bgImage) : '';
+    // The second version (dark and light for visitors): its own colour (made from the first unless set),
+    // its own picture if there is one, and on light a picture can be lightened instead of darkened
+    const mode = shownMode();
+    const other = modeSet.switchable && mode !== modeSet.main;
+    const image = custom && set.bgImage ? assetUrl(other && set.bgImageOther ? set.bgImageOther : set.bgImage) : '';
+    const colour = !custom ? '' : !other ? set.bgColor : isHexColor(set.bgColorOther) ? set.bgColorOther : otherBackground(set.bgColor, mode);
+    const lighten = Boolean(image) && other && mode === 'light' && set.bgOther === 'light';
     section.classList.toggle('bg-main', set.background === 'main');
     section.classList.toggle('bg-alt', set.background === 'alt');
     section.classList.toggle('bg-custom', custom);
-    // Text on a picture is light (the picture is darkened); on a colour, whatever reads on it
-    section.classList.toggle('tone-light', custom && (Boolean(image) || !isLightColor(set.bgColor)));
-    section.classList.toggle('tone-dark', custom && !image && isLightColor(set.bgColor));
-    section.style.backgroundColor = custom && /^#[0-9a-f]{6}$/i.test(set.bgColor || '') ? set.bgColor : '';
-    const shade = `rgba(0, 0, 0, ${set.bgDarken / 100})`;
+    // Text on a picture is light (the picture is darkened) or dark (lightened); on a colour, whatever reads on it
+    section.classList.toggle('tone-light', custom && (image ? !lighten : !isLightColor(colour)));
+    section.classList.toggle('tone-dark', custom && (image ? lighten : isLightColor(colour)));
+    section.style.backgroundColor = custom && isHexColor(colour) ? colour : '';
+    const shade = lighten ? `rgba(255, 255, 255, ${set.bgDarken / 100})` : `rgba(0, 0, 0, ${set.bgDarken / 100})`;
     section.style.backgroundImage = image ? `linear-gradient(${shade}, ${shade}), url("${cssString(image)}")` : '';
     section.classList.toggle('title-small', set.titleStyle === 'small');
     section.style.setProperty('--title-scale', String(set.titleSize / 100));

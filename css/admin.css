@@ -671,6 +671,29 @@ html:not(.adm-editing) [data-placeholder].is-empty,
 .adm-seg:hover { color: var(--text); }
 .adm-seg.is-active { background: var(--accent); color: var(--on-accent); }
 
+/* "Visitors see: Dark / Light / Both", and with both, one row of colours per version */
+.adm-visitors { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.adm-visitors .adm-label { margin: 0; }
+.adm-version { display: grid; gap: 10px; }
+.adm-version + .adm-version { padding-top: 12px; border-top: 1px solid var(--border); }
+.adm-version-name { font-size: 0.8rem; font-weight: 700; color: var(--text-dim); }
+.adm-bg-versions { gap: 18px; }
+
+/* After turning on both: the sections with their own background, to check */
+.adm-backgrounds-tip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-alt);
+  font-size: 0.85rem;
+}
+
+.adm-backgrounds-tip .adm-icon { margin-left: auto; }
+
 .adm-chips { display: flex; flex-wrap: wrap; gap: clamp(4px, 1.6cqi, 10px); }
 
 .adm-chip {

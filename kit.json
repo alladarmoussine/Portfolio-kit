@@ -1,9 +1,9 @@
 {
   "kit": "alladarmoussine/portfolio-kit",
   "source": "alladarmoussine/AlladarMoussineSite",
-  "build": 17,
-  "date": "2026-10-26",
-  "commit": "409f372",
+  "build": 18,
+  "date": "2026-10-28",
+  "commit": "acf4f6a",
   "files": [
     ".gitattributes",
     "404.html",
@@ -17,6 +17,11 @@
     "starter/site.js"
   ],
   "notes": [
+    {
+      "build": 18,
+      "date": "2026-10-28",
+      "message": "Dark and light for visitors"
+    },
     {
       "build": 17,
       "date": "2026-10-26",

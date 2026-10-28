@@ -28,6 +28,8 @@ window.SITE_CONTENT = {
     "headingFont": "",
     "radius": 14,
     "titleDot": true,
+    "switchable": false,
+    "other": {},
     "colors": {},
     "saved": [],
     "customFonts": [],
