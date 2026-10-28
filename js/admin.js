@@ -217,6 +217,7 @@
     c.theme.titleDot = c.theme.titleDot !== false;
     // Dark and light for visitors: theme.other holds the second version's own changes
     c.theme.switchable = Boolean(c.theme.switchable);
+    c.theme.modeButton = ['icon', 'label', 'switch'].includes(c.theme.modeButton) ? c.theme.modeButton : 'icon';
     c.theme.other = c.theme.other && typeof c.theme.other === 'object' ? c.theme.other : {};
     c.theme.customFonts = (c.theme.customFonts || []).map((f) => ({ name: '', file: '', weight: 'auto', style: 'normal', ...f }));
     c.customSections = (c.customSections || []).map(normalizeSection);
@@ -3613,10 +3614,34 @@
         h('span', { class: 'adm-label', text: 'Visitors see' }),
         h('div', { class: 'adm-segs', title: 'Both: each visitor first sees the version their device prefers, and a \u263E/\u2600 button in the menu switches. The top section stays dark in both, so its text reads on photos and video.' },
           visitorsButton('dark', MODE_NAMES.dark), visitorsButton('light', MODE_NAMES.light), visitorsButton('both', '\u25D0 Both'))),
+      !setup && theme.switchable ? modeButtonLook(theme) : null,
       !setup && theme.switchable && backgroundsNote && backgroundsNote.length ? backgroundsTip(theme) : null,
       schemeChips(theme, (scheme) => { useScheme(theme, scheme); redraw(); }, true),
       ...rows,
       theme.switchable ? h('p', { class: 'adm-hint', text: 'A scheme sets both versions; the second is made to match. Change a colour in either row, and the page shows that version while you do.' }) : null);
+  }
+
+  // How the ☾/☀ button in the menu looks: an icon, the icon with a word, or a sliding switch
+  function modeButtonLook(theme) {
+    const look = (value, label, title) => h('button', {
+      class: `adm-seg${theme.modeButton === value ? ' is-active' : ''}`,
+      type: 'button',
+      'aria-pressed': String(theme.modeButton === value),
+      text: label,
+      title,
+      onclick: () => {
+        if (theme.modeButton === value) return;
+        theme.modeButton = value;
+        window.SiteTheme.apply(theme);
+        redraw();
+      },
+    });
+    return h('div', { class: 'adm-visitors' },
+      h('span', { class: 'adm-label', text: 'Menu button' }),
+      h('div', { class: 'adm-segs' },
+        look('icon', '☀', 'A sun or a moon'),
+        look('label', '☀ Light', 'The icon with a word: the version it switches to'),
+        look('switch', '☾●', 'A sliding switch')));
   }
 
   // After turning on both versions: sections with their own background, each a click away

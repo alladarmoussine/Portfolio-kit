@@ -14,6 +14,8 @@ window.SITE_UI_TEXT = {
   },
   'lang.label': { en: 'Language', nl: 'Taal', fr: 'Langue', ro: 'Limbă' },
   'site.missing': { en: 'That page doesn’t exist, so here’s the home page.', nl: 'Die pagina bestaat niet, dus hier is de startpagina.', fr: 'Cette page n’existe pas : voici la page d’accueil.', ro: 'Pagina aceea nu există, așa că iată pagina principală.' },
+  'mode.light': { en: 'Light', nl: 'Licht', fr: 'Clair', ro: 'Luminos' },
+  'mode.dark': { en: 'Dark', nl: 'Donker', fr: 'Sombre', ro: 'Întunecat' },
   'mode.toLight': { en: 'Switch to light mode', nl: 'Naar lichte modus', fr: 'Passer en mode clair', ro: 'Comută la modul luminos' },
   'mode.toDark': { en: 'Switch to dark mode', nl: 'Naar donkere modus', fr: 'Passer en mode sombre', ro: 'Comută la modul întunecat' },
   'nav.toggle': { en: 'Toggle navigation', nl: 'Menu openen of sluiten', fr: 'Ouvrir ou fermer le menu', ro: 'Deschide sau închide meniul' },

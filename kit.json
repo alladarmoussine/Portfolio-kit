@@ -1,9 +1,9 @@
 {
   "kit": "alladarmoussine/portfolio-kit",
   "source": "alladarmoussine/AlladarMoussineSite",
-  "build": 18,
+  "build": 19,
   "date": "2026-10-28",
-  "commit": "acf4f6a",
+  "commit": "2791c34",
   "files": [
     ".gitattributes",
     "404.html",
@@ -17,6 +17,11 @@
     "starter/site.js"
   ],
   "notes": [
+    {
+      "build": 19,
+      "date": "2026-10-28",
+      "message": "Dark/light button: left of the language switch, with a choice of look (icon, icon and word, switch)"
+    },
     {
       "build": 18,
       "date": "2026-10-28",

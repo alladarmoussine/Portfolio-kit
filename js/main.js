@@ -1394,7 +1394,7 @@ function applyTheme(theme) {
   const fonts = document.getElementById('theme-fonts');
   const href = themeFontsHref(theme);
   if (fonts.getAttribute('href') !== href) fonts.setAttribute('href', href);
-  modeSet = { switchable: Boolean(theme && theme.switchable), main: themeColors(theme).mode };
+  modeSet = { switchable: Boolean(theme && theme.switchable), main: themeColors(theme).mode, look: (theme && theme.modeButton) || 'icon' };
   showModeOnPage();
 }
 
@@ -1406,7 +1406,8 @@ const MODE_KEY = 'site-mode';
 const prefersLight = window.matchMedia('(prefers-color-scheme: light)');
 // (an index.html from before the button gets a stand-in, so nothing breaks)
 const modeButton = document.getElementById('mode-toggle') || document.createElement('button');
-let modeSet = { switchable: false, main: 'dark' };
+let modeSet = { switchable: false, main: 'dark', look: 'icon' };
+const MODE_LOOKS = ['icon', 'label', 'switch']; // the button: a sun or moon, the same with a word, or a sliding switch
 let previewMode = ''; // the admin panel showing the version being edited
 let lookContent = null; // what the sections' backgrounds were last drawn from
 let fadeTimer = 0;
@@ -1433,6 +1434,10 @@ function showModeOnPage() {
   else delete root.dataset.mode;
   modeButton.hidden = !modeSet.switchable;
   modeButton.dataset.mode = mode;
+  MODE_LOOKS.forEach((look) => modeButton.classList.toggle(`is-${look}`, look === (MODE_LOOKS.includes(modeSet.look) ? modeSet.look : 'icon')));
+  // With a word: the version it switches to
+  const word = modeButton.querySelector('.mode-word');
+  if (word) word.textContent = t(mode === 'dark' ? 'mode.light' : 'mode.dark');
   const label = t(mode === 'dark' ? 'mode.toLight' : 'mode.toDark');
   modeButton.setAttribute('aria-label', label);
   modeButton.title = label;

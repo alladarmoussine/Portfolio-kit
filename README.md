@@ -166,7 +166,8 @@ again with a new GitHub token; nothing on the site is lost either way.
   The page recolours while a colour is dragged. **Visitors see: ☾ Dark / ☀ Light / ◐ Both**.
   Dark or Light is one version (switching makes the other version of the scheme). With **Both**
   (`theme.switchable`), visitors first see the version their device prefers, and a ☾/☀ button in
-  the menu bar switches; the browser remembers it, and a line at the top of `index.html` applies a
+  the menu bar (left of the language switch) switches; **Menu button** picks its look: an icon, the
+  icon with a word (the version it switches to), or a sliding switch (`theme.modeButton`); the browser remembers it, and a line at the top of `index.html` applies a
   remembered choice before the page shows, so it doesn't flash. The second version is made from
   the first in the same tint, with the accents made lighter or darker until they read on its
   background; a ☾ Dark and a ☀ Light row of colours fine-tune each (the second's changes are

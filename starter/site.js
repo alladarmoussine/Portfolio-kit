@@ -29,6 +29,7 @@ window.SITE_CONTENT = {
     "radius": 14,
     "titleDot": true,
     "switchable": false,
+    "modeButton": "icon",
     "other": {},
     "colors": {},
     "saved": [],
