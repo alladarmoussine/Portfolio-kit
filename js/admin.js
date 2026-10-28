@@ -412,7 +412,7 @@
     Object.values(content.sections).forEach((set) => { paths.add(set && set.bgImage); paths.add(set && set.bgImageOther); });
     content.work.forEach((item) => {
       paths.add(item.thumb);
-      item.videos.forEach((clip) => { paths.add(clip.video); paths.add(clip.thumb); });
+      item.videos.forEach((clip) => { paths.add(clip.video); paths.add(clip.thumb); paths.add(clip.preview); });
       item.images.forEach((img) => paths.add(img.src));
     });
     paths.delete('');
@@ -3531,16 +3531,21 @@
         rowControls(buttons, i, 'button'))));
   }
 
+  // A button that picks one file, like "+ Add pictures" (the browser's own file box would say
+  // "Choose file / No file chosen" in the computer's language, and the panel already shows the file)
   function filePicker(accept, onPick) {
-    return h('input', {
-      type: 'file',
-      accept,
-      onchange: (e) => {
-        const file = e.target.files[0];
-        if (file) onPick(file);
-        e.target.value = '';
-      },
-    });
+    const what = /video/.test(accept) ? 'a video' : /font|woff|ttf|otf/.test(accept) ? 'a font file'
+      : /\.cur|\.ani/.test(accept) ? 'a pointer image' : /image/.test(accept) ? 'a picture' : 'a file';
+    return h('label', { class: 'adm-btn adm-file-btn' }, `Choose ${what}…`,
+      h('input', {
+        type: 'file',
+        accept,
+        onchange: (e) => {
+          const file = e.target.files[0];
+          if (file) onPick(file);
+          e.target.value = '';
+        },
+      }));
   }
 
   function currentFile(path) {
@@ -5697,7 +5702,8 @@
           const path = stageFile(file, `assets/${folder}/${slug(name)}-${Date.now().toString(36)}${extension(file)}`);
           if (path) { clip.video = path; rerenderTab(); }
         }),
-        h('span', { class: 'adm-hint', text: `Up to ${MAX_BYTES / MB} MB. Bigger videos belong on YouTube, or on your own storage/CDN using "Direct video URL".` }));
+        h('span', { class: 'adm-hint', text: `Up to ${MAX_BYTES / MB} MB. Bigger videos belong on YouTube, or on your own storage/CDN using "Direct video URL".` }),
+        videoWeight(clip.video));
     } else {
       source = field('Direct video URL', h('input', {
         type: 'url',
@@ -5705,8 +5711,99 @@
         placeholder: 'https://your-storage.example.com/videos/clip.mp4',
         oninput: (e) => { clip.video = e.target.value.trim(); changed(); },
       }), 'A direct link to the video file itself (ending in .mp4 or similar), hosted on your own storage or CDN. Nothing is uploaded through this panel for this option; make sure the file is already live at that URL.');
+      source.appendChild(videoWeight(clip.video));
     }
     return { modeSelect: field('Source', modeSelect), source };
+  }
+
+  // ---------- How heavy a video is ----------
+  // Its picture size and length, and when they can be read, its size and how much it streams per second.
+  // An upload's size is known; a linked file's only when its storage lets this site ask (CORS). Above
+  // WEB_MBPS it's heavier than a website needs: a 1080p web copy is about 4-6 Mbit/s and looks the same.
+  const WEB_MBPS = 8;
+  const videoFacts = new Map(); // address -> the job finding them out
+
+  function factsOf(src) {
+    if (!videoFacts.has(src)) {
+      const file = state.pending.get(src);
+      const url = window.SITE_ASSET_OVERRIDES[src] || src;
+      videoFacts.set(src, (async () => {
+        const meta = await new Promise((resolve) => {
+          const video = document.createElement('video');
+          const done = (value) => { resolve(value); video.removeAttribute('src'); video.load(); };
+          video.preload = 'metadata';
+          video.muted = true;
+          video.onloadedmetadata = () => done({ width: video.videoWidth, height: video.videoHeight, seconds: video.duration });
+          video.onerror = () => done(null);
+          setTimeout(() => done(null), 20000);
+          video.src = url;
+        });
+        let bytes = file ? file.size : null;
+        if (!file && /^https?:/i.test(src)) {
+          try {
+            const answer = await fetch(src, { method: 'HEAD' });
+            bytes = Number(answer.headers.get('content-length')) || null;
+          } catch { /* the storage doesn't allow it */ }
+        }
+        return { meta, bytes };
+      })());
+    }
+    return videoFacts.get(src);
+  }
+
+  function videoWeight(src) {
+    const box = h('div', { class: 'adm-video-weight' });
+    if (!src) return box;
+    const notes = [];
+    // Cloudflare's r2.dev addresses are for trying a bucket out: slowed down when a site gets visitors
+    let host = '';
+    try { host = new URL(src).hostname; } catch { /* a path in the repository */ }
+    if (/\.r2\.dev$/i.test(host)) {
+      notes.push('This is an r2.dev address: Cloudflare\u2019s test address for a bucket. It\u2019s rate-limited and not meant for a live site. In Cloudflare: R2 \u2192 your bucket \u2192 Settings \u2192 Custom Domains, connect a domain, then use that address here.');
+    }
+    box.appendChild(h('span', { class: 'adm-hint', text: 'Checking the video\u2026' }));
+    factsOf(src).then(({ meta, bytes }) => {
+      box.innerHTML = '';
+      const time = (secs) => `${Math.floor(secs / 60)}:${String(Math.round(secs % 60)).padStart(2, '0')}`;
+      const facts = [];
+      if (meta && meta.width) facts.push(`${meta.width}\u00D7${meta.height}`);
+      if (meta && Number.isFinite(meta.seconds)) facts.push(time(meta.seconds));
+      if (bytes) facts.push(formatSize(bytes));
+      const mbps = bytes && meta && meta.seconds ? (bytes * 8) / meta.seconds / 1e6 : null;
+      if (mbps) facts.push(`${mbps.toFixed(1)} Mbit/s`);
+      box.appendChild(h('span', { class: 'adm-hint', text: meta ? facts.join(' \u00B7 ') : 'The video couldn\u2019t be opened from here. Check that the link plays in a new tab.' }));
+      if (mbps && mbps > WEB_MBPS) {
+        const web = (5e6 * meta.seconds) / 8;
+        box.appendChild(h('p', { class: 'adm-video-warn', text: `Heavy for a website: visitors stream ${mbps.toFixed(0)} Mbit/s, which stutters on phones and slow Wi-Fi. A web copy at about 5 Mbit/s would be around ${formatSize(web)} and look the same on screen. In HandBrake: preset \u201CFast 1080p30\u201D; in Premiere: H.264, \u201CMatch Source \u2013 Adaptive Medium Bitrate\u201D.` }));
+      } else if (!bytes && meta && /^https?:/i.test(src)) {
+        box.appendChild(h('span', { class: 'adm-hint', text: 'Its file size can\u2019t be read from here (the storage doesn\u2019t allow it), so the panel can\u2019t tell how heavy it is. Allowing this site in the bucket\u2019s CORS settings lets it check.' }));
+      }
+      notes.forEach((note) => box.appendChild(h('p', { class: 'adm-video-warn', text: note })));
+    });
+    return box;
+  }
+
+  // A smaller copy for the top-section monitor, which plays small and muted: 720p at about 1.5 Mbit/s,
+  // without sound, is plenty there. The project's pop-up keeps playing the video itself.
+  function previewField(clip, name) {
+    return h('div', { class: 'adm-field' },
+      h('span', { class: 'adm-label', text: 'Lighter copy for the top-section monitor (optional)' }),
+      h('input', {
+        type: 'url',
+        value: clip.preview && /^https?:/i.test(clip.preview) ? clip.preview : '',
+        placeholder: 'https://\u2026/clip-small.mp4',
+        oninput: (e) => { clip.preview = e.target.value.trim(); changed(); },
+        onchange: () => rerenderTab(),
+      }),
+      h('div', { class: 'adm-inline' },
+        clip.preview && !/^https?:/i.test(clip.preview) ? currentFile(clip.preview) : null,
+        clip.preview ? h('button', { class: 'adm-link', type: 'button', text: 'Remove', onclick: () => { clip.preview = ''; rerenderTab(); } }) : null,
+        filePicker('video/*', (file) => {
+          const path = stageFile(file, `assets/work/${slug(name)}-small-${Date.now().toString(36)}${extension(file)}`);
+          if (path) { clip.preview = path; rerenderTab(); }
+        })),
+      h('span', { class: 'adm-hint', text: 'The monitor plays this instead of the full video, so the top section loads quickly. Export about 720p at 1.5 Mbit/s with no sound (HandBrake: preset \u201CFast 720p30\u201D, audio track removed); a link or an upload.' }),
+      clip.preview ? videoWeight(clip.preview) : null);
   }
 
   function videoForm(item, clip, i) {
@@ -5717,6 +5814,7 @@
         field('Video title', text(clip, 'title', { placeholder: i === 0 ? 'Optional, e.g. a name' : `Video ${i + 1}` })),
         modeSelect),
       source,
+      clip.video && !clip.youtube ? previewField(clip, clip.title || item.title) : null,
       h('div', { class: 'adm-field' },
         h('span', { class: 'adm-label', text: 'Thumbnail (optional)' }),
         h('div', { class: 'adm-inline' },
@@ -5836,6 +5934,7 @@
           h('span', { class: 'adm-hint', text: 'Landscape, at least 1920 px wide. Empty shows the plain dark background.' })),
         field('Background video (optional)', text(c.hero, 'backgroundVideo', { type: 'url', placeholder: 'https://your-storage.example.com/videos/showreel-loop.mp4' }),
           'A direct link to a short MP4 on your own storage. It plays muted on a loop, with the photo shown while it loads. Empty uses the photo.'),
+        c.hero.backgroundVideo ? videoWeight(c.hero.backgroundVideo) : null,
         slider(set, 'overlay', 'Darken photo/video', 0, 100, 5, '%', 'More darkening keeps the text easier to read.'),
         check(set, 'showGlow', 'Soft glow in the accent colour on the plain background')),
       h('button', {
@@ -6095,7 +6194,10 @@
         item.tools = item.tools.filter(Boolean);
         item.videos = item.videos.filter((clip) => clip.video || clip.youtube);
         item.images = item.images.filter((img) => img.src);
-        item.videos.forEach((clip) => { delete clip._mode; });
+        item.videos.forEach((clip) => {
+          delete clip._mode;
+          if (!clip.preview) delete clip.preview;
+        });
         item.links = item.links.filter((l) => l.label && l.url);
         if (!item.draft) delete item.draft;
         if (!item.slug) delete item.slug;

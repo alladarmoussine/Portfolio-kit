@@ -1,9 +1,9 @@
 {
   "kit": "alladarmoussine/portfolio-kit",
   "source": "alladarmoussine/AlladarMoussineSite",
-  "build": 27,
+  "build": 28,
   "date": "2026-10-28",
-  "commit": "2ccbfc6",
+  "commit": "dee52ea",
   "files": [
     ".gitattributes",
     "404.html",
@@ -17,6 +17,11 @@
     "starter/site.js"
   ],
   "notes": [
+    {
+      "build": 28,
+      "date": "2026-10-28",
+      "message": "Contact form: no message under it once the mail website has opened"
+    },
     {
       "build": 27,
       "date": "2026-10-28",

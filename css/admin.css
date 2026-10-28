@@ -44,12 +44,21 @@
 
 .adm-top h2 { white-space: nowrap; }
 
-.adm-top-actions { display: flex; align-items: center; gap: 8px; }
+.adm-top-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+.adm-root { container-type: inline-size; }
+/* A narrow panel leaves out the word "Admin" and uses smaller round buttons, so they stay on one line */
+@container (max-width: 520px) {
+  .adm-top h2 { display: none; }
+  .adm-top { justify-content: flex-end; }
+  .adm-top-actions { gap: 4px; }
+  .adm-top-actions .adm-close { width: 30px; height: 30px; }
+}
 
 .adm-help { margin: 0; color: var(--text-dim); }
 .adm-help a { color: var(--accent); text-decoration: underline; }
 
-.adm-field { display: grid; gap: 6px; }
+/* minmax(0, 1fr): a column is as wide as the panel, never as wide as its longest line or option */
+.adm-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
 
 .adm-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .adm-check input { width: 16px; height: 16px; accent-color: var(--accent-orange); }
@@ -57,12 +66,12 @@
 /* Top section tab */
 .adm-group-box { padding: 14px; border: 1px solid var(--border); border-radius: 10px; }
 .adm-btn.adm-btn-danger:hover { border-color: #e5484d; color: #ff8a8d; }
-.adm-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; }
+.adm-checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; }
 .adm-value { margin-left: 4px; color: var(--accent-orange); font-weight: 700; }
 .adm-root input[type="range"] { width: 100%; accent-color: var(--accent-orange); }
 
 @media (max-width: 520px) {
-  .adm-checks { grid-template-columns: 1fr; }
+  .adm-checks { grid-template-columns: minmax(0, 1fr); }
 }
 .adm-label { font-weight: 700; font-size: 0.85rem; }
 .adm-hint { color: var(--text-dim); font-size: 0.82rem; }
@@ -93,12 +102,12 @@
 
 .adm-root input[type="file"] { font: inherit; font-size: 0.85rem; color: var(--text-dim); }
 
-.adm-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.adm-row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.adm-row2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.adm-row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 
 @media (max-width: 480px) {
   .adm-row2,
-  .adm-row3 { grid-template-columns: 1fr; }
+  .adm-row3 { grid-template-columns: minmax(0, 1fr); }
 }
 
 .adm-btn {
@@ -185,7 +194,7 @@
 
 .adm-tab.is-active { background: var(--text); border-color: var(--text); color: var(--bg); font-weight: 700; }
 
-.adm-form { display: grid; gap: 14px; }
+.adm-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 
 .adm-section-head {
   display: flex;
@@ -926,8 +935,13 @@ html:not(.adm-editing) [data-placeholder].is-empty,
 .adm-picture-tools { display: flex; align-items: center; gap: 8px; }
 
 /* A file input dressed as a button */
-.adm-file-btn { position: relative; cursor: pointer; }
+.adm-file-btn { position: relative; justify-self: start; overflow: hidden; cursor: pointer; }
 .adm-file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.adm-file-btn:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* A video's size and streaming rate, and what to do when it's too heavy */
+.adm-video-weight { display: grid; gap: 6px; }
+.adm-video-warn { margin: 0; padding: 8px 10px; border-left: 3px solid var(--accent-orange); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 0.82rem; }
 
 /* Phone preview: the page at phone width in a frame, beside the panel */
 .adm-phone {
@@ -1238,7 +1252,9 @@ html:not(.adm-editing) [data-placeholder].is-empty,
 .adm-status:not(.is-error) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* a row's or project's header stays one line whatever its badges say, */
 .adm-entry-title { overflow: hidden; }
-.adm-entry-title > span:not(.adm-badge) { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* A long title wraps under its badge instead of being cut off */
+.adm-entry-title { flex-wrap: wrap; row-gap: 4px; }
+.adm-entry-title > span:not(.adm-badge) { min-width: 0; overflow-wrap: anywhere; }
 .adm-entry-title .adm-badge { white-space: nowrap; }
 /* and the update notice sits at the bottom of the panel instead of pushing everything down when it arrives */
 .adm-editor > .adm-update-banner { position: sticky; bottom: 12px; z-index: 3; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); background: color-mix(in srgb, var(--accent) 22%, var(--bg-alt)); }
@@ -1487,3 +1503,8 @@ html.adm-resizing iframe { pointer-events: none; }
 .adm-part-bar .adm-bar-btn { min-width: 24px; height: 24px; padding: 0 6px; }
 .adm-part-bar .adm-bar-btn svg { width: 14px; height: 14px; }
 .adm-part-bar .adm-bar-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+
+/* The panel's stacked lists and boxes take the panel's width, not the width of their longest line
+   (menus and cards that size themselves to what's in them are left out) */
+:is(.adm-entry, .adm-entry-list, .adm-outline-list, .adm-row-body, .adm-add, .adm-rich, .adm-version, .adm-lang,
+  .adm-files, .adm-share-text, .adm-video-weight, .adm-font-styles) { grid-template-columns: minmax(0, 1fr); }

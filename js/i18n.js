@@ -75,6 +75,15 @@ window.SITE_UI_TEXT = {
   'contact.sent': { en: 'Thanks! Your message has been sent.', nl: 'Bedankt! Je bericht is verstuurd.', fr: 'Merci ! Votre message a été envoyé.', ro: 'Mulțumesc! Mesajul tău a fost trimis.' },
   'contact.failed': { en: 'Sorry, the message couldn’t be sent.', nl: 'Sorry, het bericht kon niet worden verstuurd.', fr: 'Désolé, le message n’a pas pu être envoyé.', ro: 'Ne pare rău, mesajul nu a putut fi trimis.' },
   'contact.failedEmail': { en: 'Send it by email instead', nl: 'Stuur het dan per e-mail', fr: 'Envoyez-le plutôt par e-mail', ro: 'Trimite-l prin e-mail' },
+  'contact.pickMail': {
+    en: 'Your message is ready. Send it with',
+    nl: 'Je bericht is klaar. Verstuur het met',
+    fr: 'Votre message est prêt. Envoyez-le avec',
+    ro: 'Mesajul tău e gata. Trimite-l cu',
+  },
+  'contact.emailApp': { en: 'Email app', nl: 'E-mailapp', fr: 'Application e-mail', ro: 'Aplicația de e-mail' },
+  'contact.copy': { en: 'Copy the message', nl: 'Kopieer het bericht', fr: 'Copier le message', ro: 'Copiază mesajul' },
+  'contact.copied': { en: 'Copied: paste it into an email to {email}', nl: 'Gekopieerd: plak het in een e-mail aan {email}', fr: 'Copié : collez-le dans un e-mail à {email}', ro: 'Copiat: lipește-l într-un e-mail către {email}' },
   'contact.noteDirect': {
     en: 'Your message goes straight to {first}.',
     nl: 'Je bericht gaat rechtstreeks naar {first}.',
@@ -82,9 +91,9 @@ window.SITE_UI_TEXT = {
     ro: 'Mesajul tău ajunge direct la {first}.',
   },
   'contact.note': {
-    en: 'Sending opens your email app with the message pre-filled, addressed to {first}.',
-    nl: 'Bij verzenden opent je e-mailapp met het bericht al ingevuld, gericht aan {first}.',
-    fr: "L'envoi ouvre votre application e-mail avec le message déjà rempli, adressé à {first}.",
-    ro: 'La trimitere se deschide aplicația ta de e-mail cu mesajul deja completat, adresat către {first}.',
+    en: 'Sending opens your email (Gmail, Outlook…) with the message written to {first}, ready to send.',
+    nl: 'Bij verzenden opent je e-mail (Gmail, Outlook…) met het bericht aan {first} al geschreven, klaar om te versturen.',
+    fr: "L'envoi ouvre votre messagerie (Gmail, Outlook…) avec le message pour {first} déjà écrit, prêt à partir.",
+    ro: 'La trimitere se deschide e-mailul tău (Gmail, Outlook…) cu mesajul către {first} deja scris, gata de trimis.',
   },
 };

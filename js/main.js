@@ -925,9 +925,9 @@ const heroMonitor = document.getElementById('hero-monitor');
 const monitorPlayers = [...heroMonitor.querySelectorAll('video')];
 const monitorTitle = document.getElementById('monitor-title');
 const monitorTc = document.getElementById('monitor-tc');
-// Stills instead of video for visitors who reduce motion or ask to save data
+// Stills instead of video for visitors who reduce motion, ask to save data or are on a slow connection
 const monitorStill = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  || Boolean(navigator.connection && navigator.connection.saveData);
+  || Boolean(navigator.connection && (navigator.connection.saveData || ['slow-2g', '2g', '3g'].includes(navigator.connection.effectiveType)));
 let reelSources = [];
 let timelineClips = [];
 let timelineKey = '';
@@ -935,7 +935,8 @@ let playheadEl = null;
 let timecodeEl = null;
 let currentReel = -1;
 
-// Uploaded videos from Work, featured projects first (YouTube can't play in the monitor)
+// Uploaded videos from Work, featured projects first (YouTube can't play in the monitor). A video's
+// lighter copy (clip.preview: smaller, no sound needed) plays here when it has one; the pop-up plays the video.
 function reelFromWork(items) {
   const ordered = items.map((item, index) => ({ item, index })).filter(({ item }) => !item.draft);
   if (heroSettings.monitorOrder === 'featured') {
@@ -945,7 +946,7 @@ function reelFromWork(items) {
     .flatMap(({ item }) => projectVideos(item)
       .filter((clip) => clip.video && safeUrl(clip.video) && !clip.hideInMonitor)
       .map((clip) => ({
-        src: assetUrl(clip.video),
+        src: assetUrl(clip.preview && safeUrl(clip.preview) ? clip.preview : clip.video),
         poster: clip.thumb ? assetUrl(clip.thumb) : coverImage(item),
         name: clip.title || item.title,
         label: clip.title ? `${item.title} · ${clip.title}` : item.title,
@@ -2556,20 +2557,63 @@ const FORM_SERVICES = {
 
 const formService = () => (FORM_SERVICES[formSettings.service] && String(formSettings.key || '').trim() ? formSettings.service : '');
 
+const mailBody = (f) => `${f.message}\n\nFrom: ${f.name} (${f.email})`;
+
 function mailtoFor(f) {
-  const body = `${f.message}\n\nFrom: ${f.name} (${f.email})`;
-  return `mailto:${contactEmail}?subject=${encodeURIComponent(f.subject)}&body=${encodeURIComponent(body)}`;
+  return `mailto:${contactEmail}?subject=${encodeURIComponent(f.subject)}&body=${encodeURIComponent(mailBody(f))}`;
 }
 
-function showFormStatus(text, kind, mailto) {
+// Mail websites that can open a new email with everything filled in
+const WEBMAILS = [
+  { name: 'Gmail', domains: /^(gmail|googlemail)\.com$/, url: (to, subject, body) => `https://mail.google.com/mail/?view=cm&fs=1&to=${to}&su=${subject}&body=${body}` },
+  { name: 'Outlook', domains: /^(outlook|hotmail|live|msn)\.[a-z.]+$/, url: (to, subject, body) => `https://outlook.live.com/mail/0/deeplink/compose?to=${to}&subject=${subject}&body=${body}` },
+  { name: 'Yahoo Mail', domains: /^(yahoo|ymail|rocketmail)\.[a-z.]+$/, url: (to, subject, body) => `https://compose.mail.yahoo.com/?to=${to}&subject=${subject}&body=${body}` },
+];
+
+const webmailUrl = (mail, f) => mail.url(encodeURIComponent(contactEmail), encodeURIComponent(f.subject), encodeURIComponent(mailBody(f)));
+
+// The mail website the visitor uses, told by the address they typed (sam@gmail.com: Gmail); null for
+// addresses that don't say (a work or school address could be on any of them)
+function webmailFor(address) {
+  const domain = String(address).split('@')[1] || '';
+  return WEBMAILS.find((mail) => mail.domains.test(domain.toLowerCase())) || null;
+}
+
+// The ways to send the message: each mail website with it filled in, the email app (withApp), or a copy
+// to paste into an email
+function emailOptions(f, withApp) {
+  const link = (label, href) => {
+    const a = el('a', null, label);
+    a.href = href;
+    if (/^https:/.test(href)) { a.target = '_blank'; a.rel = 'noopener'; }
+    return a;
+  };
+  const copy = el('button', 'form-copy', t('contact.copy'));
+  copy.type = 'button';
+  copy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(`${contactEmail}\n${f.subject}\n\n${mailBody(f)}`);
+      copy.textContent = t('contact.copied').replace('{email}', contactEmail);
+    } catch {
+      copy.textContent = contactEmail; // no clipboard here: at least the address to write to
+    }
+  });
+  const items = [
+    ...WEBMAILS.map((mail) => link(mail.name, webmailUrl(mail, f))),
+    withApp ? link(t('contact.emailApp'), mailtoFor(f)) : null,
+    copy,
+  ].filter(Boolean);
+  const list = el('span', 'form-options');
+  items.forEach((item, i) => list.append(i ? ' · ' : '', item));
+  return list;
+}
+
+// `f`: the message, to offer the other ways to send it (`withApp`: the email app among them)
+function showFormStatus(text, kind, f, withApp) {
   formStatus.hidden = false;
   formStatus.className = `form-status is-${kind}`;
   formStatus.textContent = text;
-  if (mailto && contactEmail) {
-    const link = el('a', null, t('contact.failedEmail'));
-    link.href = mailto;
-    formStatus.append(' ', link);
-  }
+  if (f && contactEmail) formStatus.append(' ', emailOptions(f, withApp));
 }
 
 // Sends one message through the service set; throws if it doesn't arrive. Used by the admin panel's test too.
@@ -2589,8 +2633,17 @@ contactForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const value = (id) => document.getElementById(id).value.trim();
   const f = { name: value('name'), email: value('email'), subject: value('subject'), message: value('message') };
+  // No service: the visitor's own mail website opens in a new tab with the email written (Gmail for a
+  // Gmail address…), ready to send. An address that doesn't say which one gets the choice instead.
   if (!formService()) {
-    window.location.href = mailtoFor(f);
+    const mail = webmailFor(f.email);
+    const tab = mail ? window.open(webmailUrl(mail, f), '_blank') : null;
+    if (tab) {
+      tab.opener = null;
+      formStatus.hidden = true;
+    } else {
+      showFormStatus(t('contact.pickMail'), 'busy', f, true);
+    }
     return;
   }
   // Filled in by a robot: act as if it was sent
@@ -2607,7 +2660,7 @@ contactForm.addEventListener('submit', async (e) => {
     contactForm.reset();
     showFormStatus(t('contact.sent'), 'ok');
   } catch {
-    showFormStatus(t('contact.failed'), 'error', mailtoFor(f));
+    showFormStatus(`${t('contact.failed')} ${t('contact.failedEmail')}:`, 'error', f, true);
   } finally {
     button.disabled = false;
   }

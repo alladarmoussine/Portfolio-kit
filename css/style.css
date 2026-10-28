@@ -1808,7 +1808,9 @@ main > section.is-off-page { display: none !important; }
 .form-status.is-ok { color: #6ee7a0; }
 .form-status.is-error { color: var(--accent-orange); }
 .form-status.is-busy { color: var(--text-dim); }
-.form-status a { color: var(--text); text-decoration: underline; }
+.form-status a,
+.form-copy { color: var(--text); text-decoration: underline; }
+.form-copy { padding: 0; border: 0; background: none; font: inherit; cursor: pointer; }
 
 /* The spam trap: out of sight, and skipped by keyboards and screen readers */
 .form-trap { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
