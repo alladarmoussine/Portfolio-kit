@@ -1,9 +1,9 @@
 {
   "kit": "alladarmoussine/portfolio-kit",
   "source": "alladarmoussine/AlladarMoussineSite",
-  "build": 23,
+  "build": 24,
   "date": "2026-10-28",
-  "commit": "301a4f7",
+  "commit": "26134cc",
   "files": [
     ".gitattributes",
     "404.html",
@@ -17,6 +17,11 @@
     "starter/site.js"
   ],
   "notes": [
+    {
+      "build": 24,
+      "date": "2026-10-28",
+      "message": "Fix the Theme tab going blank with your own font; schemes easier to delete"
+    },
     {
       "build": 23,
       "date": "2026-10-28",

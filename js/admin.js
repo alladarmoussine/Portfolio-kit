@@ -3532,7 +3532,12 @@
         theme.saved.splice(i, 1);
         redraw();
       } : null)),
-      edits ? chip(edits, 'Your edits', 'Colours you changed by hand (not saved as a scheme)') : null,
+      // Edits you switched away from can be thrown away; the ones in use stay (↺ goes back to the scheme)
+      edits ? chip(edits, 'Your edits', 'Colours you changed by hand (not saved as a scheme)', manage && !custom ? () => {
+        if (!confirm('Throw away your edits? The colours you’re using now stay.')) return;
+        looseEdits = null;
+        redraw();
+      } : null) : null,
       nameField || (manage && custom ? h('button', {
         class: 'adm-chip adm-chip-add',
         type: 'button',
@@ -3769,7 +3774,7 @@
       }, sample(current), h('span', { class: 'adm-font-name', text: current || emptyLabel }), h('span', { class: 'adm-hint', text: isOpen ? 'Close' : 'Change' })),
       isOpen ? h('div', { class: 'adm-fonts' },
         emptyLabel ? option('', emptyLabel) : null,
-        own.length ? [h('span', { class: 'adm-fonts-group', text: 'Your fonts' }), own.map((name) => option(name))] : null,
+        own.length ? [h('span', { class: 'adm-fonts-group', text: 'Your fonts' }), ...own.map((name) => option(name))] : null,
         h('span', { class: 'adm-fonts-group', text: 'Google Fonts' }),
         Object.keys(window.SiteTheme.fonts).map((name) => option(name))) : null);
   }

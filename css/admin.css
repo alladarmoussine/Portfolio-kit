@@ -731,7 +731,7 @@ html:not(.adm-editing) [data-placeholder].is-empty,
   border: 1px solid rgba(127, 127, 127, 0.45);
 }
 
-/* × on saved schemes: shown on hover */
+/* ✕ on saved schemes (and on "Your edits" when not in use): always there, stronger on hover */
 .adm-chip-x {
   margin: 0 4px 0 -6px;
   padding: 0 4px;
@@ -741,15 +741,11 @@ html:not(.adm-editing) [data-placeholder].is-empty,
   font: inherit;
   font-size: 0.7rem;
   cursor: pointer;
-  opacity: 0;
+  opacity: 0.6;
 }
 
 .adm-chip:hover .adm-chip-x, .adm-chip-x:focus-visible { opacity: 1; }
-.adm-chip-x:hover { color: var(--text); }
-
-@media (hover: none) {
-  .adm-chip-x { opacity: 1; }
-}
+.adm-chip-x:hover { color: var(--accent-orange); }
 
 .adm-chip-add { padding: clamp(3px, 0.8cqi, 6px) clamp(10px, 3cqi, 16px); border-style: dashed; color: var(--text-dim); cursor: pointer; }
 .adm-chip-add:hover { color: var(--text); }
