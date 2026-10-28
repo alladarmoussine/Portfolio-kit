@@ -551,7 +551,7 @@ html:not(.adm-editing) [data-placeholder].is-empty,
 .faq-list > .adm-add-tile { min-height: 40px; margin-top: 12px; }
 .work-grid > .adm-add-tile { min-height: 180px; }
 
-/* Which keys do what, under the text being typed */
+/* Which keys do what, by the text being typed (with formatting: the format bar, see below) */
 .adm-typing-hint {
   position: absolute;
   z-index: 40;
@@ -1155,6 +1155,29 @@ html:not(.adm-editing) [data-placeholder].is-empty,
 .adm-tool:hover { border-color: var(--border); background: var(--surface); }
 .adm-tool[title="Bold"] { font-weight: 800; }
 .adm-tool[title="Italic"] { font-style: italic; }
+.adm-tool-select { margin-left: auto; padding: 2px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 0.8rem; cursor: pointer; }
+.adm-tool-select:hover { border-color: var(--border); background: var(--surface); }
+
+/* A one-line box with the buttons: the box comes first in the page code, the buttons show above it */
+.adm-rich-line > .adm-tools { order: -1; }
+.adm-rich-line > input,
+.adm-rich-line > textarea { border-top-left-radius: 0; border-top-right-radius: 0; }
+
+/* The format bar: B, I, link and spacing above the text being typed on the page */
+.adm-format-bar { display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 12px; color: var(--text); pointer-events: auto; }
+.adm-fmt { min-width: 28px; height: 28px; padding: 0 8px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; font-size: 0.82rem; cursor: pointer; }
+.adm-fmt:hover:not(:disabled) { background: var(--surface); }
+.adm-fmt.is-active { background: var(--accent); color: var(--on-accent); }
+.adm-fmt:disabled { opacity: 0.4; cursor: default; }
+.adm-fmt[data-fmt="bold"] { font-weight: 800; }
+.adm-fmt[data-fmt="italic"] { font-style: italic; font-family: Georgia, serif; }
+.adm-fmt-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--border); }
+.adm-fmt-label { margin: 0 4px 0 2px; color: var(--text-dim); font-size: 0.75rem; }
+.adm-format-bar .adm-fmt-keys { padding: 0 8px 0 2px; color: var(--text-dim); white-space: nowrap; }
+@media (max-width: 640px) { .adm-format-bar { flex-wrap: wrap; max-width: calc(100vw - 16px); } }
+
+/* While typing, the section, item and arrange bars step aside for it */
+.adm-is-typing :is(.adm-section-bar, .adm-item-bar, .adm-part-bar, .adm-part-tag, .adm-insert) { visibility: hidden !important; opacity: 0 !important; }
 
 /* A button: label, link, style and its controls on one row */
 .adm-button-row { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 6px; align-items: center; }
@@ -1383,6 +1406,9 @@ html.adm-resizing iframe { pointer-events: none; }
 .adm-font { padding: 6px 10px; border-color: transparent; background: transparent; }
 .adm-font.is-active { border-color: var(--accent); background: var(--surface); }
 .adm-fonts-group { grid-column: 1 / -1; margin-top: 4px; color: var(--text-dim); font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+/* A font's weight, bold, spacing (and for headings italic and capitals), under its picker */
+.adm-font-styles { display: grid; gap: 10px; margin: -4px 0 6px; padding: 10px 0 10px 14px; border-left: 2px solid var(--border); }
+.adm-font-styles .adm-inline { gap: 8px 18px; }
 
 /* Folded groups: one line saying what they're set to */
 .adm-fold > summary { display: flex; align-items: baseline; gap: 10px; cursor: pointer; list-style: none; }

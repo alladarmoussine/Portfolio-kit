@@ -215,7 +215,7 @@ function applyUiText(root) {
   root.querySelectorAll('[data-i18n]').forEach((node) => {
     const text = t(node.dataset.i18n);
     // Re-splitting an unchanged heading would restart its letters for nothing
-    if (node.classList.contains('reveal')) { if (node.getAttribute('aria-label') !== text) setRevealText(node, text); }
+    if (node.classList.contains('reveal')) { if (node.dataset.raw !== text) setRevealText(node, text); }
     else node.textContent = text;
   });
   root.querySelectorAll('[data-i18n-label]').forEach((node) => node.setAttribute('aria-label', t(node.dataset.i18nLabel)));
@@ -469,7 +469,7 @@ function projectBody(item, index, className, teaserClass) {
     el('span', 'card-tag', typeLabel(item.type)),
     field(el('h3', null, item.title), `work.${index}.title`),
     details.length ? el('p', 'card-meta', details.join(' · ')) : null,
-    field(el('p', teaserClass, item.teaser), `work.${index}.teaser`),
+    field(formatted(el('p', teaserClass), item.teaser), `work.${index}.teaser`),
     el('span', 'view-more', t(count > 1 ? 'work.watchMany' : count ? 'work.watch' : pictures ? 'work.viewPictures' : 'work.details')),
   ].filter(Boolean));
   return body;
@@ -716,7 +716,7 @@ function renderAbout(about) {
   (about.paragraphs || []).forEach((text, i) => {
     // An empty paragraph only shows while editing, to be typed in
     if (!(text && text.trim()) && !isEditing()) return;
-    const p = field(el('p', text && text.trim() ? null : 'is-empty', text), `about.paragraphs.${i}`);
+    const p = field(formatted(el('p', text && text.trim() ? null : 'is-empty'), text), `about.paragraphs.${i}`);
     p.dataset.entry = `about.paragraphs.${i}`;
     bio.appendChild(p);
   });
@@ -743,7 +743,7 @@ function renderExperience(entries) {
     li.dataset.editItem = `experience.${i}`;
     li.dataset.entry = `experience.${i}`;
     const h3 = el('h3');
-    h3.appendChild(blankable(el('span', null, entry.role), `experience.${i}.role`, 'Role'));
+    h3.appendChild(blankable(formatted(el('span'), entry.role), `experience.${i}.role`, 'Role'));
     if (entry.org || isEditing()) {
       h3.appendChild(document.createTextNode(' '));
       h3.appendChild(blankable(el('span', 'timeline-org', entry.org), `experience.${i}.org`, 'Company or project'));
@@ -752,7 +752,7 @@ function renderExperience(entries) {
     li.append(...[
       entry.date || isEditing() ? blankable(el('span', 'timeline-date', entry.date), `experience.${i}.date`, 'Dates') : null,
       h3,
-      entry.text || isEditing() ? blankable(el('p', null, entry.text), `experience.${i}.text`, 'What you did') : null,
+      entry.text || isEditing() ? blankable(formatted(el('p'), entry.text), `experience.${i}.text`, 'What you did') : null,
     ].filter(Boolean));
     timeline.appendChild(li);
   });
@@ -778,7 +778,8 @@ function renderTexts(content) {
   document.querySelectorAll('[data-text]').forEach((node) => {
     const value = node.dataset.text.split('.').reduce((obj, key) => (obj ? obj[key] : undefined), content);
     if (typeof value === 'string') {
-      node.textContent = value;
+      node.textContent = '';
+      formatted(node, value);
       // Emptied in the admin panel: take it off the page instead of leaving a gap
       node.classList.toggle('is-empty', !value.trim());
     }
@@ -1177,7 +1178,9 @@ function applyRemovedParts(hidden) {
 }
 
 // ---------- Theme (admin: Theme tab) ----------
-// content.theme = { preset, colors: { …overrides }, font, headingFont, radius, customFonts }.
+// content.theme = { preset, colors: { …overrides }, font, headingFont, radius, customFonts, and the font
+// styles: textWeight, boldWeight, textSpacing, textSize, headingWeight, headingBold, headingItalic,
+// headingCase ("upper" | "normal"), headingSpacing }. Spacing is in hundredths of an em, size in percent.
 // customFonts = [{ name, file, weight, style }]: font files uploaded in the Theme tab (assets/fonts/).
 // The colours fill the CSS variables at the top of css/style.css.
 const THEME_PRESETS = {
@@ -1210,6 +1213,55 @@ const THEME_FONTS = {
   'Instrument Serif': '',
   'System font': null,
 };
+
+// The ones with italic letters of their own (the others are slanted by the browser)
+const THEME_ITALICS = ['Inter', 'DM Sans', 'Plus Jakarta Sans', 'Nunito', 'Poppins', 'Playfair Display', 'Fraunces', 'Cormorant Garamond', 'Instrument Serif'];
+
+// What the font styles are when the Theme tab hasn't changed them (as the site looked before they existed)
+const FONT_STYLE_DEFAULTS = { textWeight: 400, boldWeight: 700, textSpacing: 0, textSize: 100, headingWeight: 900, headingBold: 900, headingItalic: false, headingCase: 'upper', headingSpacing: 0 };
+const ALL_WEIGHTS = [100, 200, 300, 400, 500, 600, 700, 800, 900];
+
+// The weights a font comes in: a Google font's from its list, an uploaded one's from its files
+// (a file on "All weights" is a variable font), the system font's from Segoe UI
+function fontWeights(theme, name) {
+  const family = name || 'Geologica';
+  const own = ((theme && theme.customFonts) || []).filter((f) => f && f.file && String(f.name).trim() === family.trim());
+  if (own.length) {
+    if (own.some((f) => !/^\d{3}$/.test(String(f.weight)))) return ALL_WEIGHTS;
+    return [...new Set(own.map((f) => Number(f.weight)))].sort((a, b) => a - b);
+  }
+  const axes = THEME_FONTS[family];
+  if (axes === null) return [300, 400, 600, 700, 900];
+  if (axes === undefined) return ALL_WEIGHTS;
+  const range = /(\d{3})\.\.(\d{3})/.exec(axes);
+  if (range) return ALL_WEIGHTS.filter((w) => w >= Number(range[1]) && w <= Number(range[2]));
+  const list = (axes.match(/\d{3}/g) || []).map(Number);
+  return list.length ? list : [400];
+}
+
+const nearestWeight = (weights, wanted) => weights.reduce((best, w) => (Math.abs(w - wanted) < Math.abs(best - wanted) ? w : best));
+
+// The font styles as CSS variables. Weights snap to ones the font has, so nothing is drawn fake-bold;
+// bold that the font can't make heavier than the text is left to the browser to thicken, so it still shows.
+function fontStyleVars(set) {
+  const style = { ...FONT_STYLE_DEFAULTS, ...Object.fromEntries(Object.entries(set).filter(([key, value]) => key in FONT_STYLE_DEFAULTS && value != null && value !== '')) };
+  const textFont = set.font || 'Geologica';
+  const textWeights = fontWeights(set, textFont);
+  const headingWeights = fontWeights(set, set.headingFont || textFont);
+  const bold = (weights, base, wanted) => {
+    const w = nearestWeight(weights, Number(wanted));
+    return w > base ? w : Math.max(Number(wanted), base);
+  };
+  const body = nearestWeight(textWeights, Number(style.textWeight));
+  const heading = nearestWeight(headingWeights, Number(style.headingWeight));
+  // Smaller headings (experience entries) are one step lighter than the weight picked
+  const lighter = nearestWeight(headingWeights, Math.max(Number(style.headingWeight) - 100, 100));
+  const em = (v) => `${(Math.min(Math.max(Number(v) || 0, -20), 50) / 100).toFixed(2)}em`;
+  return `--body-weight:${body};--bold-weight:${bold(textWeights, body, style.boldWeight)};--text-spacing:${em(style.textSpacing)};`
+    + `--text-size:${Math.min(Math.max(Number(style.textSize) || 100, 80), 140) / 100};`
+    + `--heading-weight:${heading};--heading-lighter:${lighter};--heading-bold:${bold(headingWeights, heading, style.headingBold)};`
+    + `--heading-style:${style.headingItalic ? 'italic' : 'normal'};--heading-case:${style.headingCase === 'normal' ? 'none' : 'uppercase'};--heading-spacing:${em(style.headingSpacing)};`;
+}
 
 // The theme's colours, with the admin's overrides on top of the preset. version "other": the second
 // version when visitors can switch between dark and light (theme.switchable): colours made from the first
@@ -1322,7 +1374,14 @@ function themeFontsHref(theme) {
   if (!families.length) return '';
   return `https://fonts.googleapis.com/css2?${families.map((f) => {
     const axes = THEME_FONTS[f];
-    return `family=${encodeURIComponent(f).replace(/%20/g, '+')}${axes ? `:${axes}` : ''}`;
+    let spec = axes ? `:${axes}` : '';
+    // With its italic too (the browser only downloads it where italic is used): "wght@300..900" becomes
+    // "ital,wght@0,300..900;1,300..900"
+    if (THEME_ITALICS.includes(f)) {
+      const weights = axes ? axes.replace(/^wght@/, '').split(';') : [];
+      spec = weights.length ? `:ital,wght@${[0, 1].flatMap((i) => weights.map((w) => `${i},${w}`)).join(';')}` : ':ital@0;1';
+    }
+    return `family=${encodeURIComponent(f).replace(/%20/g, '+')}${spec}`;
   }).join('&')}&display=swap`;
 }
 
@@ -1367,7 +1426,7 @@ function themeCss(theme, forFile) {
   const own = set.colors || {};
   const radius = Math.min(Math.max(Number(set.radius ?? 14), 0), 32);
   let css = `:root{${colourVars(main, own.heroText)}`
-    + `--radius:${radius}px;--title-dot:${set.titleDot === false ? 'none' : '"."'};--font-body:${fontStack(set.font || 'Geologica')};--font-heading:${fontStack(set.headingFont || set.font || 'Geologica')}}`;
+    + `--radius:${radius}px;--title-dot:${set.titleDot === false ? 'none' : '"."'};--font-body:${fontStack(set.font || 'Geologica')};--font-heading:${fontStack(set.headingFont || set.font || 'Geologica')};${fontStyleVars(set)}}`;
   if (set.switchable) {
     const other = themeColors(set, 'other');
     const vars = colourVars(other, (set.other || {}).heroText || own.heroText);
@@ -1381,7 +1440,7 @@ function themeCss(theme, forFile) {
 function faviconHref(site, theme, forFile) {
   if (site.favicon) return forFile ? site.favicon : assetUrl(site.favicon);
   const c = themeColors(theme);
-  const initials = (site.initials || (site.name || 'Y N').split(/\s+/).map((w) => w[0]).join('').slice(0, 2)).toUpperCase().slice(0, 3);
+  const initials = (site.initials || plainText(site.name || 'Y N').split(/\s+/).map((w) => w[0]).join('').slice(0, 2)).toUpperCase().slice(0, 3);
   const esc = (v) => String(v).replace(/[<>&"']/g, '');
   const size = initials.length > 2 ? 22 : 28;
   const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='${esc(c.bg)}'/>`
@@ -1476,7 +1535,7 @@ prefersLight.addEventListener('change', () => { if (modeSet.switchable && !chose
 // apply() restyles the page at once without rebuilding it: colours, corners, fonts and the mouse effect
 // (the panel uses it while a colour or a Theme slider is dragged)
 window.SiteTheme = {
-  presets: THEME_PRESETS, fonts: THEME_FONTS, colors: themeColors, css: themeCss, fontsHref: themeFontsHref, favicon: faviconHref,
+  presets: THEME_PRESETS, fonts: THEME_FONTS, italics: THEME_ITALICS, fontWeights, fontStyle: FONT_STYLE_DEFAULTS, colors: themeColors, css: themeCss, fontsHref: themeFontsHref, favicon: faviconHref,
   apply: (theme) => { applyTheme(theme); applyCursor(theme && theme.cursor); if (lookContent) applySectionLook(lookContent); matchHeroFade(); },
   // The panel shows one version while it's edited ('' = the visitor's own again)
   showMode: (mode) => { previewMode = mode || ''; switchMode(); },
@@ -1636,11 +1695,13 @@ function playCursorFrames(frames) {
 
 // ---------- Your name and site details (admin: Site tab) ----------
 function renderIdentity(site, theme) {
-  siteName = (site.name || '').trim() || 'Your Name';
+  // The name may have formatting for the big heading; everywhere else it's the words alone
+  const name = (site.name || '').trim() || 'Your Name';
+  siteName = plainText(name);
   const words = siteName.split(/\s+/);
   firstName = (site.shortName || '').trim() || words[0];
   const heading = document.querySelector('[data-site="name"]');
-  if (heading.getAttribute('aria-label') !== siteName) setRevealText(heading, siteName);
+  if (heading.dataset.raw !== name) setRevealText(heading, name);
   field(heading, 'site.name');
   // Logo: first word plain, the rest in the accent colour
   const logo = document.querySelector('[data-site="logo"]');
@@ -1862,11 +1923,11 @@ window.SitePages = {
 // The menu label: its own label, else the standard one, else its title
 function sectionNavText(content, id) {
   const set = sectionSettings(content, id);
-  if (set.nav && set.nav.trim()) return set.nav.trim();
-  if (SECTION_TEXT[id] && SECTION_TEXT[id].nav) return t(SECTION_TEXT[id].nav);
-  if (SECTION_TEXT[id]) return t(SECTION_TEXT[id].title);
+  if (set.nav && set.nav.trim()) return plainText(set.nav.trim());
+  if (SECTION_TEXT[id] && SECTION_TEXT[id].nav) return plainText(t(SECTION_TEXT[id].nav));
+  if (SECTION_TEXT[id]) return plainText(t(SECTION_TEXT[id].title));
   if (id === 'hero') return '';
-  return (set.title || '').trim() || (set.kind === 'grid' ? t('work.title') : '');
+  return plainText((set.title || '').trim()) || (set.kind === 'grid' ? t('work.title') : '');
 }
 
 // Used by the admin panel's Page tab
@@ -1876,7 +1937,7 @@ let revealReady = false;
 
 // Sets a section heading's text, keeping it when unchanged so its letters don't animate again
 function setSectionTitle(heading, text) {
-  if (heading.getAttribute('aria-label') === text) return;
+  if (heading.dataset.raw === text) return;
   setRevealText(heading, text);
   if (revealReady) heading.classList.add('is-in');
 }
@@ -1894,31 +1955,106 @@ function setSectionTitle(heading, text) {
 //   cta:     text (one big line), sub, buttons
 // buttons = [{ label, url, style ("primary" | "ghost") }]. Text sections from before had one "button".
 
-// Simple formatting in text typed in the admin panel: **bold**, *italic*, [label](link), and blocks whose
+// Simple formatting in text typed in the admin panel: **bold**, *italic*, [label](link), letter spacing
+// as [[tight:words]], [[wide:words]] or [[wider:words]] (these can go inside each other), and blocks whose
 // lines all start with "- " become a list. Paragraphs are separated by an empty line. Built as elements,
 // never as HTML, so nothing typed can run as code.
-function inlineText(parent, text) {
-  const pattern = /\*\*([^*]+)\*\*|\*([^*\s][^*]*)\*|\[([^\]]+)\]\(([^)\s]+)\)/g;
-  let last = 0;
-  let match;
-  while ((match = pattern.exec(text))) {
-    if (match.index > last) parent.appendChild(document.createTextNode(text.slice(last, match.index)));
-    if (match[1]) parent.appendChild(el('strong', null, match[1]));
-    else if (match[2]) parent.appendChild(el('em', null, match[2]));
-    else {
-      const url = safeUrl(match[4]);
-      const link = url ? el('a', 'text-link', match[3]) : document.createTextNode(match[3]);
-      if (url) {
-        link.href = url;
-        if (/^https?:/i.test(url)) { link.target = '_blank'; link.rel = 'noopener'; }
-      }
-      parent.appendChild(link);
+const SPACING_MARKS = ['tight', 'wide', 'wider'];
+
+// The text as a tree: strings, and { type: 'strong' | 'em' | 'space' | 'link', name, url, children }.
+// A * opens before a letter and closes after one (so "5 * 3" stays as typed); marks left open are text.
+function parseInline(text) {
+  const root = { children: [] };
+  const stack = [root];
+  let buf = '';
+  const top = () => stack[stack.length - 1];
+  const flush = () => { if (buf) top().children.push(buf); buf = ''; };
+  const open = (node) => { flush(); top().children.push(node); stack.push(node); };
+  // An opener that never closed goes back to being the text it was
+  const unwrap = () => {
+    const node = stack.pop();
+    const parent = top();
+    parent.children.splice(parent.children.indexOf(node), 1, node.raw, ...node.children);
+  };
+  const close = (type) => {
+    flush();
+    while (top().type !== type) unwrap();
+    stack.pop();
+  };
+  const isOpen = (type) => stack.some((n) => n.type === type);
+  let i = 0;
+  while (i < text.length) {
+    const rest = text.slice(i);
+    const before = text[i - 1] || ' ';
+    let m;
+    if ((m = /^\[\[(tight|wide|wider):/.exec(rest))) {
+      open({ type: 'space', name: m[1], raw: m[0], children: [] });
+      i += m[0].length;
+    } else if (rest.startsWith(']]') && isOpen('space')) {
+      close('space');
+      i += 2;
+    } else if ((m = /^\[([^\][]+)\]\(([^)\s]+)\)/.exec(rest))) {
+      flush();
+      top().children.push({ type: 'link', url: m[2], children: parseInline(m[1]) });
+      i += m[0].length;
+    } else if (rest[0] === '*') {
+      const double = rest.startsWith('**');
+      const canClose = !/\s/.test(before);
+      const canOpen = /\S/.test(rest[double ? 2 : 1] || ' ') && !/^\*+$/.test(rest.slice(0, 4));
+      if (top().type === 'em' && canClose) { close('em'); i += 1; }
+      else if (double && isOpen('strong') && canClose) { close('strong'); i += 2; }
+      else if (!double && isOpen('em') && canClose) { close('em'); i += 1; }
+      else if (double && canOpen) { open({ type: 'strong', raw: '**', children: [] }); i += 2; }
+      else if (canOpen) { open({ type: 'em', raw: '*', children: [] }); i += 1; }
+      else { buf += rest[0]; i += 1; }
+    } else {
+      buf += rest[0];
+      i += 1;
     }
-    last = pattern.lastIndex;
   }
-  if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+  flush();
+  while (stack.length > 1) unwrap();
+  return root.children;
+}
+
+// The element for one mark (a link to an address that isn't allowed is just its words)
+function inlineTag(node) {
+  if (node.type === 'space') return el('span', `ls-${node.name}`);
+  if (node.type !== 'link') return el(node.type);
+  const url = safeUrl(node.url);
+  if (!url) return el('span');
+  const link = el('a', 'text-link');
+  link.href = url;
+  if (/^https?:/i.test(url)) { link.target = '_blank'; link.rel = 'noopener'; }
+  return link;
+}
+
+function inlineNodes(parent, nodes) {
+  nodes.forEach((node) => {
+    if (typeof node === 'string') { if (node) parent.appendChild(document.createTextNode(node)); return; }
+    parent.appendChild(inlineNodes(inlineTag(node), node.children));
+  });
   return parent;
 }
+
+function inlineText(parent, text) {
+  return inlineNodes(parent, parseInline(String(text || '')));
+}
+
+// The words without the marks: for the menu, the browser tab, link previews and screen readers
+function plainText(text) {
+  const flat = (nodes) => nodes.map((node) => (typeof node === 'string' ? node : flat(node.children))).join('');
+  return flat(parseInline(String(text || '')));
+}
+
+// A one-line text with formatting, tagged so the admin panel edits it as such
+function formatted(node, text) {
+  node.dataset.inline = '';
+  return inlineText(node, text);
+}
+
+// Used by the admin panel: the formatting marks (see parseInline)
+window.SiteText = { parse: parseInline, inline: inlineText, plain: plainText, spacing: SPACING_MARKS };
 
 // path: where the text is in the content, so the admin panel can edit it on the page (as typed, with the **)
 function richText(text, className, path) {
@@ -2011,7 +2147,7 @@ const SECTION_BODIES = {
       frame.innerHTML = reelPlaceholder;
       applyUiText(frame);
     }
-    return [frame, sec.caption ? field(el('p', 'video-caption', sec.caption), `${path}.caption`) : null];
+    return [frame, sec.caption ? field(formatted(el('p', 'video-caption'), sec.caption), `${path}.caption`) : null];
   },
 
   quotes(sec, path) {
@@ -2059,7 +2195,7 @@ const SECTION_BODIES = {
       const box = el('div', 'number-item');
       box.dataset.entry = `${path}.items.${n}`;
       box.append(field(el('strong', 'number-value', item.value), `${path}.items.${n}.value`),
-        field(el('span', 'number-label', item.label), `${path}.items.${n}.label`));
+        field(formatted(el('span', 'number-label'), item.label), `${path}.items.${n}.label`));
       grid.appendChild(box);
     });
     return [grid.children.length ? grid : null];
@@ -2075,7 +2211,7 @@ const SECTION_BODIES = {
       // Open while editing, so the answer can be typed in
       entry.open = isEditing();
       const question = el('summary');
-      question.appendChild(field(el('span', null, item.q), `${path}.items.${n}.q`));
+      question.appendChild(field(formatted(el('span'), item.q), `${path}.items.${n}.q`));
       entry.append(question, richText(item.a, 'faq-answer', `${path}.items.${n}.a`));
       list.appendChild(entry);
     });
@@ -2084,8 +2220,8 @@ const SECTION_BODIES = {
 
   cta(sec, path) {
     return [
-      sec.text ? field(el('p', 'cta-line', sec.text), `${path}.text`) : null,
-      sec.sub ? field(el('p', 'cta-sub', sec.sub), `${path}.sub`) : null,
+      sec.text ? field(formatted(el('p', 'cta-line'), sec.text), `${path}.text`) : null,
+      sec.sub ? field(formatted(el('p', 'cta-sub'), sec.sub), `${path}.sub`) : null,
       sectionButtons(sec),
     ];
   },
@@ -2126,7 +2262,7 @@ function renderCustomSections(content) {
     const title = (sectionSettings(content, sec.id).title || sec.title || '').trim();
     const heading = node.querySelector('.section-title') || el('h2', 'section-title reveal');
     setSectionTitle(heading, title);
-    const intro = sec.intro && sec.intro.trim() ? field(el('p', 'section-sub', sec.intro), `${path}.intro`) : null;
+    const intro = sec.intro && sec.intro.trim() ? field(formatted(el('p', 'section-sub'), sec.intro), `${path}.intro`) : null;
     const [first, ...rest] = SECTION_BODIES[type](sec, path, title).filter(Boolean);
     const inner = el('div', 'container custom-inner');
     const head = el('div', 'custom-text');
@@ -2672,7 +2808,8 @@ function fillProject(item, thumbSource) {
   modalMeta.textContent = [item.client, item.year, item.role].filter(Boolean).join(' · ');
   modalMeta.hidden = !modalMeta.textContent;
   modalDesc.hidden = false;
-  modalDesc.textContent = item.desc || item.teaser;
+  modalDesc.textContent = '';
+  inlineText(modalDesc, item.desc || item.teaser);
 
   modalTools.innerHTML = '';
   (item.tools || []).filter(Boolean).forEach((tool) => modalTools.appendChild(el('span', 'skill-tag', tool)));
@@ -2823,23 +2960,45 @@ const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').match
 const revealHeadings = document.querySelectorAll('.reveal');
 
 // Also used when the language changes (see applyUiText)
+// The text may have formatting (bold, italic, spacing): each letter goes inside the marks around it.
+// dataset.raw keeps the text as typed, aria-label the words alone.
 function setRevealText(heading, text) {
-  heading.setAttribute('aria-label', text);
+  heading.dataset.raw = text;
+  heading.setAttribute('aria-label', plainText(text));
   heading.textContent = '';
+  const letters = [];
+  const walk = (nodes, marks) => nodes.forEach((node) => {
+    if (typeof node === 'string') [...node].forEach((ch) => letters.push({ ch, marks }));
+    else walk(node.children, [...marks, node]);
+  });
+  walk(parseInline(text), []);
   let i = 0;
-  text.split(' ').forEach((word, w) => {
-    if (w > 0) heading.appendChild(document.createTextNode(' '));
-    const wordEl = document.createElement('span');
-    wordEl.className = 'reveal-word';
-    wordEl.setAttribute('aria-hidden', 'true');
-    [...word].forEach((ch) => {
-      const charEl = document.createElement('span');
-      charEl.className = 'reveal-char';
-      charEl.style.setProperty('--i', i++);
-      charEl.textContent = ch;
-      wordEl.appendChild(charEl);
+  let wordEl = null;
+  let open = []; // [{ node, box }]: the marks the last letter was in, outermost first
+  letters.forEach(({ ch, marks }) => {
+    if (ch === ' ') {
+      heading.appendChild(document.createTextNode(' '));
+      wordEl = null;
+      return;
+    }
+    if (!wordEl) {
+      wordEl = el('span', 'reveal-word');
+      wordEl.setAttribute('aria-hidden', 'true');
+      heading.appendChild(wordEl);
+      open = [];
+    }
+    // Stays in the marks it shares with the letter before, opens the rest
+    let same = 0;
+    while (same < open.length && same < marks.length && open[same].node === marks[same]) same += 1;
+    open = open.slice(0, same);
+    marks.slice(same).forEach((node) => {
+      const box = inlineTag(node);
+      (open.length ? open[open.length - 1].box : wordEl).appendChild(box);
+      open.push({ node, box });
     });
-    heading.appendChild(wordEl);
+    const charEl = el('span', 'reveal-char', ch);
+    charEl.style.setProperty('--i', i++);
+    (open.length ? open[open.length - 1].box : wordEl).appendChild(charEl);
   });
 }
 

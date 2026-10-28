@@ -1,9 +1,9 @@
 {
   "kit": "alladarmoussine/portfolio-kit",
   "source": "alladarmoussine/AlladarMoussineSite",
-  "build": 25,
+  "build": 26,
   "date": "2026-10-28",
-  "commit": "e13ab18",
+  "commit": "ddc5314",
   "files": [
     ".gitattributes",
     "404.html",
@@ -17,6 +17,11 @@
     "starter/site.js"
   ],
   "notes": [
+    {
+      "build": 26,
+      "date": "2026-10-28",
+      "message": "Merge branch 'dev'"
+    },
     {
       "build": 25,
       "date": "2026-10-28",

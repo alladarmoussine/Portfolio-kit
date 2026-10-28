@@ -210,7 +210,7 @@
     c.site.url = c.site.url || '';
     const languages = window.SiteI18n.settings(c);
     c.languages = { main: languages.main, available: languages.available, ui: { ...((c.languages || {}).ui || {}) } };
-    c.theme = { preset: 'midnight', font: 'Geologica', headingFont: '', radius: 14, ...(c.theme || {}) };
+    c.theme = { preset: 'midnight', font: 'Geologica', headingFont: '', radius: 14, ...window.SiteTheme.fontStyle, ...(c.theme || {}) };
     c.theme.colors = { ...(c.theme.colors || {}) };
     c.theme.cursor = { ...(window.CURSOR_DEFAULTS || {}), ...(c.theme.cursor || {}) };
     c.theme.saved = (Array.isArray(c.theme.saved) ? c.theme.saved : []).map((scheme) => ({ name: '', preset: 'midnight', ...scheme, colors: { ...((scheme && scheme.colors) || {}) } }));
@@ -1286,16 +1286,22 @@
     stopEditing();
     const path = node.dataset.field;
     const rich = node.hasAttribute('data-rich');
+    // Text that can have formatting (bold, italic, links, spacing) is typed as it shows; the rest as plain text
+    const marks = rich || node.hasAttribute('data-inline') || node.classList.contains('reveal');
     const slot = fieldSlot(path);
-    editing = { node, path, rich, slot, stored: slot.obj[slot.key] };
+    editing = { node, path, rich, marks, slot, stored: slot.obj[slot.key] };
     node.querySelectorAll(CHROME).forEach((n) => n.remove());
-    // Text with formatting shows as it's typed (**bold**…), and a title as plain text instead of letter by letter
-    if (rich) node.textContent = editing.stored || getPath(path) || '';
-    else if (node.classList.contains('reveal')) node.textContent = node.getAttribute('aria-label') || node.textContent;
+    // A title is typed as one line of text, not letter by letter
+    if (node.classList.contains('reveal')) {
+      const raw = node.dataset.raw != null ? node.dataset.raw : node.textContent;
+      node.textContent = '';
+      window.SiteText.inline(node, raw);
+    }
     node.classList.add('adm-typing');
-    node.contentEditable = 'plaintext-only';
-    if (node.contentEditable !== 'plaintext-only') node.contentEditable = 'true';
-    editing.handlers = { input: onEditInput, keydown: onEditKey, paste: pastePlainText };
+    document.documentElement.classList.add('adm-is-typing');
+    node.contentEditable = marks ? 'true' : 'plaintext-only';
+    if (node.contentEditable !== 'plaintext-only' && node.contentEditable !== 'true') node.contentEditable = 'true';
+    editing.handlers = { input: onEditInput, keydown: onEditKey, paste: pastePlainText, drop: (e) => e.preventDefault() };
     Object.entries(editing.handlers).forEach(([type, fn]) => node.addEventListener(type, fn));
     node.focus({ preventScroll: true });
     placeCaret(node, event, selectAll, atStart);
@@ -1318,8 +1324,8 @@
   }
 
   function onEditInput() {
-    const { node, rich, slot } = editing;
-    const typed = rich ? node.innerText.replace(/\n+$/, '') : node.textContent.replace(/\n/g, ' ');
+    const { node, rich, marks, slot } = editing;
+    const typed = marks ? toMarkup(node, rich) : node.textContent.replace(/\n/g, ' ');
     slot.obj[slot.key] = typed.replace(/ /g, ' ');
     node.classList.remove('is-empty');
     syncPanel();
@@ -1340,8 +1346,18 @@
       stopEditing();
       return;
     }
+    // Ctrl+B bold, Ctrl+I italic, Ctrl+K link (and nothing the page can't keep, like underline)
+    if (editing.marks && (e.ctrlKey || e.metaKey) && !e.altKey) {
+      const key = e.key.toLowerCase();
+      const run = { b: () => toggleMark('bold'), i: () => toggleMark('italic'), k: toggleLink, u: () => {} }[key];
+      if (run) {
+        e.preventDefault();
+        run();
+        return;
+      }
+    }
     if (e.key !== 'Enter') return;
-    if (editing.rich && !(e.ctrlKey || e.metaKey)) return; // a new line; an empty line starts a new paragraph
+    if (editing.rich && !(e.ctrlKey || e.metaKey)) return; // a new paragraph (Shift+Enter: a new line in it)
     e.preventDefault();
     if (/^about\.paragraphs\.\d+$/.test(editing.path) && !e.ctrlKey && !e.metaKey && !translating('paragraphs')) splitParagraph();
     else stopEditing();
@@ -1351,18 +1367,19 @@
   function splitParagraph() {
     const { node, path } = editing;
     const i = Number(path.split('.').pop());
-    const text = node.textContent.replace(/ /g, ' ');
-    let at = text.length;
+    // What's after the cursor moves out, with its formatting
+    const tail = document.createElement('div');
     const selection = window.getSelection();
     if (selection.rangeCount && node.contains(selection.anchorNode)) {
       const range = document.createRange();
       range.selectNodeContents(node);
-      range.setEnd(selection.anchorNode, selection.anchorOffset);
-      at = range.toString().length;
+      range.setStart(selection.anchorNode, selection.anchorOffset);
+      tail.appendChild(range.extractContents());
     }
-    editing.slot.obj[editing.slot.key] = text.slice(0, at).trimEnd();
+    const after = toMarkup(tail).trimStart();
+    editing.slot.obj[editing.slot.key] = toMarkup(node).trimEnd();
     stopEditing();
-    changeList('about.paragraphs', (a, main) => a.splice(i + 1, 0, main ? text.slice(at).trimStart() : ''));
+    changeList('about.paragraphs', (a, main) => a.splice(i + 1, 0, main ? after : ''));
     const next = document.querySelector(`[data-field="about.paragraphs.${i + 1}"]`);
     if (next) startEditing(next, { atStart: true });
   }
@@ -1374,6 +1391,7 @@
     Object.entries(handlers || {}).forEach(([type, fn]) => node.removeEventListener(type, fn));
     node.removeAttribute('contenteditable');
     node.classList.remove('adm-typing');
+    document.documentElement.classList.remove('adm-is-typing');
     hideTypingHint();
     if (node.contains(document.activeElement)) document.activeElement.blur();
     changed(); // redraws the page with the text as it shows (formatting, title letters) and records the step
@@ -1384,23 +1402,317 @@
     document.execCommand('insertText', false, e.clipboardData.getData('text/plain'));
   }
 
-  // A small line under the text being typed: which keys do what
+  // ---------- Formatting typed on the page ----------
+  // The text being typed, back to the marks the page reads (see parseInline in js/main.js):
+  // **bold**, *italic*, [words](link) and [[wide:words]]. Marks only hold letters: spaces at their
+  // edges go outside, and a mark inside the same mark adds nothing.
+  const SPACINGS = [['tight', 'Tight'], ['', 'Normal'], ['wide', 'Wide'], ['wider', 'Wider']];
+  const SPACING_CLASSES = window.SiteText.spacing.map((name) => `.ls-${name}`).join(', ');
+  const spacingOf = (node) => window.SiteText.spacing.find((name) => node.classList.contains(`ls-${name}`)) || '';
+
+  function marksOf(node, inside = {}) {
+    let out = '';
+    node.childNodes.forEach((child) => {
+      if (child.nodeType === 3) { out += child.data.replace(/\u00a0/g, ' '); return; }
+      if (child.nodeType !== 1 || child.matches(CHROME)) return;
+      const tag = child.tagName;
+      if (tag === 'BR') { out += '\n'; return; }
+      const wrap = (open, close, more) => {
+        const [, lead, words, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(marksOf(child, { ...inside, ...more }));
+        return words ? `${lead}${open}${words}${close}${trail}` : lead + trail;
+      };
+      const space = spacingOf(child);
+      const href = tag === 'A' ? child.dataset.href || child.getAttribute('href') : '';
+      if ((tag === 'STRONG' || tag === 'B') && !inside.bold) out += wrap('**', '**', { bold: true });
+      else if ((tag === 'EM' || tag === 'I') && !inside.italic) out += wrap('*', '*', { italic: true });
+      else if (space && inside.space !== space) out += wrap(`[[${space}:`, ']]', { space });
+      else if (href && !inside.link) out += wrap('[', `](${href.replace(/[\s)]/g, encodeURIComponent)})`, { link: true });
+      else out += marksOf(child, inside);
+    });
+    return out;
+  }
+
+  // Marks of the same kind side by side become one (bold "o" + bold "ld" is **old**, not **o****ld**)
+  function mergeMarks(node) {
+    [...node.children].forEach((child) => {
+      mergeMarks(child);
+      const link = (n) => n.dataset.href || n.getAttribute('href');
+      let next = child.nextSibling;
+      while (next && next.nodeType === 1 && /^(STRONG|B|EM|I|SPAN|A)$/.test(child.tagName)
+        && next.tagName === child.tagName && next.className === child.className && link(next) === link(child)) {
+        child.append(...next.childNodes);
+        next.remove();
+        next = child.nextSibling;
+      }
+    });
+    return node;
+  }
+
+  // A paragraph text (rich): its paragraphs and lists, the way it was typed in the panel
+  function toMarkup(typed, rich) {
+    const node = mergeMarks(typed.cloneNode(true));
+    if (!rich) return marksOf(node).replace(/\s*\n\s*/g, ' ');
+    const blocks = [];
+    let loose = null; // text typed straight into the box, before there is a paragraph
+    node.childNodes.forEach((child) => {
+      if (child.nodeType === 1 && /^(UL|OL)$/.test(child.tagName)) {
+        loose = null;
+        blocks.push([...child.children].map((li) => `- ${marksOf(li).replace(/\s*\n\s*/g, ' ').trim()}`).join('\n'));
+      } else if (child.nodeType === 1 && /^(P|DIV|LI|H\d)$/.test(child.tagName)) {
+        loose = null;
+        blocks.push(marksOf(child));
+      } else {
+        if (loose === null) { loose = blocks.length; blocks.push(''); }
+        const one = document.createElement('div');
+        one.appendChild(child.cloneNode(true));
+        blocks[loose] += marksOf(one);
+      }
+    });
+    return blocks.map((block) => block.replace(/^\n+|\n+$/g, '')).filter((block) => block.trim()).join('\n\n');
+  }
+
+  // The selection, if it's in the text being typed
+  function editRange() {
+    const selection = window.getSelection();
+    if (!editing || !selection.rangeCount) return null;
+    const range = selection.getRangeAt(0);
+    return editing.node.contains(range.commonAncestorContainer) ? range : null;
+  }
+
+  // The selection cut per paragraph or list item, so marks never hold more than one
+  function blockRanges(range) {
+    const blocks = editing.rich ? [...editing.node.querySelectorAll('p, li, div')].filter((b) => !b.querySelector('p, li, div')) : [];
+    if (!blocks.length) return [range];
+    return blocks.filter((b) => range.intersectsNode(b)).map((b) => {
+      const part = document.createRange();
+      part.selectNodeContents(b);
+      if (b.contains(range.startContainer)) part.setStart(range.startContainer, range.startOffset);
+      if (b.contains(range.endContainer)) part.setEnd(range.endContainer, range.endOffset);
+      return part;
+    }).filter((part) => !part.collapsed);
+  }
+
+  // The text nodes a range has selected letters of
+  function textIn(range) {
+    const box = range.commonAncestorContainer;
+    const nodes = [];
+    if (box.nodeType === 3) nodes.push(box);
+    else {
+      const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) if (range.intersectsNode(walker.currentNode)) nodes.push(walker.currentNode);
+    }
+    return nodes.filter((n) => {
+      const from = n === range.startContainer ? range.startOffset : 0;
+      const to = n === range.endContainer ? range.endOffset : n.data.length;
+      return n.data.slice(from, to).trim();
+    });
+  }
+
+  const markAbove = (n, selector) => {
+    const found = (n.nodeType === 1 ? n : n.parentElement).closest(selector);
+    return found && found !== editing.node && editing.node.contains(found) ? found : null;
+  };
+
+  // Two empty markers keep a range's place while the marks around it are taken apart and put back
+  function pin(range) {
+    const a = h('span', { class: 'adm-pin' });
+    const b = h('span', { class: 'adm-pin' });
+    const end = range.cloneRange();
+    end.collapse(false);
+    end.insertNode(b);
+    const start = range.cloneRange();
+    start.collapse(true);
+    start.insertNode(a);
+    return {
+      a,
+      b,
+      range() {
+        const r = document.createRange();
+        r.setStartAfter(a);
+        r.setEndBefore(b);
+        return r;
+      },
+    };
+  }
+
+  // Takes a mark off the pinned part: what's before and after it keeps the mark
+  function unmark(pinned, selector) {
+    for (let guard = 0; guard < 50; guard += 1) {
+      const mark = textIn(pinned.range()).map((n) => markAbove(n, selector)).find(Boolean);
+      if (!mark) return;
+      const head = document.createRange();
+      head.setStart(mark, 0);
+      if (mark.contains(pinned.a)) head.setEndBefore(pinned.a);
+      else head.setEnd(mark, 0);
+      const tail = document.createRange();
+      tail.setEnd(mark, mark.childNodes.length);
+      if (mark.contains(pinned.b)) tail.setStartAfter(pinned.b);
+      else tail.setStart(mark, mark.childNodes.length);
+      const before = head.extractContents();
+      const after = tail.extractContents();
+      if (before.textContent) { const copy = mark.cloneNode(false); copy.appendChild(before); mark.before(copy); }
+      if (after.textContent) { const copy = mark.cloneNode(false); copy.appendChild(after); mark.after(copy); }
+      mark.replaceWith(...mark.childNodes);
+    }
+  }
+
+  function wrapRange(pinned, make, selector) {
+    const range = pinned.range();
+    const box = make();
+    box.appendChild(range.extractContents());
+    box.querySelectorAll(selector).forEach((m) => m.replaceWith(...m.childNodes));
+    range.insertNode(box);
+  }
+
+  // Runs a change on the selection (each paragraph of it), keeps it selected and saves what's typed
+  function onSelection(change, { whole } = {}) {
+    let range = editRange();
+    if (!range) return;
+    if (range.collapsed) {
+      if (!whole) return;
+      range = document.createRange();
+      range.selectNodeContents(editing.node);
+    }
+    const pins = blockRanges(range).map(pin);
+    pins.forEach(change);
+    if (pins.length) {
+      const all = document.createRange();
+      all.setStartAfter(pins[0].a);
+      all.setEndBefore(pins[pins.length - 1].b);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(all);
+    }
+    pins.forEach(({ a, b }) => { a.remove(); b.remove(); });
+    editing.node.querySelectorAll(`strong, b, em, i, a, ${SPACING_CLASSES}`).forEach((m) => { if (!m.textContent) m.remove(); });
+    editing.node.normalize();
+    onEditInput();
+  }
+
+  const MARKS = { bold: ['strong, b', () => document.createElement('strong')], italic: ['em, i', () => document.createElement('em')] };
+  const isMarked = (range, selector) => {
+    const letters = textIn(range);
+    return letters.length > 0 && letters.every((n) => markAbove(n, selector));
+  };
+
+  function toggleMark(kind) {
+    const [selector, make] = MARKS[kind];
+    const range = editRange();
+    if (!range || range.collapsed) return;
+    const on = blockRanges(range).every((part) => isMarked(part, selector));
+    onSelection((pinned) => (on ? unmark(pinned, selector) : wrapRange(pinned, make, selector)));
+  }
+
+  // Letter spacing for the selection (or, with nothing selected, the whole text); '' is the normal spacing
+  function setSpacing(name) {
+    onSelection((pinned) => {
+      unmark(pinned, SPACING_CLASSES);
+      if (name) wrapRange(pinned, () => h('span', { class: `ls-${name}` }), SPACING_CLASSES);
+    }, { whole: true });
+  }
+
+  // A link on the selection, or off it if it already is one
+  function toggleLink() {
+    const range = editRange();
+    if (!range || range.collapsed) return;
+    if (isMarked(range, 'a')) {
+      onSelection((pinned) => unmark(pinned, 'a'));
+      return;
+    }
+    const kept = range.cloneRange();
+    const url = prompt('Link address (https://…, mailto:… or #contact)');
+    if (!editing) return;
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(kept);
+    if (!url || !url.trim()) return;
+    // The address is kept aside (data-href), so nothing typed runs while editing; the page checks it when drawn
+    onSelection((pinned) => wrapRange(pinned, () => h('a', { class: 'text-link', href: '#', 'data-href': url.trim() }), 'a'));
+  }
+
+  // What the selection has, for the bar's buttons
+  function selectionState() {
+    const range = editRange();
+    const now = { has: Boolean(range && !range.collapsed), bold: false, italic: false, link: false, spacing: null };
+    if (!range) return now;
+    const look = range.collapsed ? (() => { const r = document.createRange(); r.selectNodeContents(editing.node); return r; })() : range;
+    const letters = textIn(look);
+    now.bold = now.has && isMarked(range, MARKS.bold[0]);
+    now.italic = now.has && isMarked(range, MARKS.italic[0]);
+    now.link = now.has && isMarked(range, 'a');
+    const names = new Set(letters.map((n) => { const m = markAbove(n, SPACING_CLASSES); return m ? spacingOf(m) : ''; }));
+    now.spacing = names.size === 1 ? [...names][0] : names.size ? null : '';
+    return now;
+  }
+
+  // The bar over the text being typed: B, I, link and letter spacing (for text that can have them), and
+  // which keys do what. It sits above the text (where the section and item bars are, hidden while typing),
+  // or below when there's no room under the site's header, and on touch screens, where the phone's own
+  // copy and paste menu opens above.
   let typingHint = null;
+
+  function buildTypingHint() {
+    const { rich, path, marks } = editing;
+    const keys = rich ? 'Enter: new paragraph · Ctrl+Enter: done · Esc: cancel'
+      : /^about\.paragraphs\./.test(path) && !translating('paragraphs') ? 'Enter: new paragraph · Click elsewhere: done · Esc: cancel'
+        : 'Enter: done · Esc: cancel';
+    // mousedown is stopped so the text keeps its selection
+    const tool = (name, label, title, run) => h('button', {
+      class: 'adm-fmt', type: 'button', 'data-fmt': name, text: label, title, 'aria-label': title,
+      onmousedown: (e) => e.preventDefault(), onclick: run,
+    });
+    const bar = h('div', { class: `adm-typing-hint${marks ? ' adm-format-bar' : ''}`, role: marks ? 'toolbar' : null, 'aria-label': marks ? 'Formatting' : null, 'aria-hidden': marks ? null : 'true' },
+      marks ? [
+        tool('bold', 'B', 'Bold (Ctrl+B)', () => toggleMark('bold')),
+        tool('italic', 'I', 'Italic (Ctrl+I)', () => toggleMark('italic')),
+        tool('link', '🔗', 'Link (Ctrl+K)', toggleLink),
+        h('span', { class: 'adm-fmt-sep' }),
+        h('span', { class: 'adm-fmt-label', text: 'Spacing' }),
+        ...SPACINGS.map(([name, label]) => tool(`ls:${name}`, label, name ? `${label} letter spacing (the selection, or all of it)` : 'Normal letter spacing', () => setSpacing(name))),
+        h('span', { class: 'adm-fmt-sep' }),
+      ] : null,
+      h('span', { class: 'adm-fmt-keys', text: keys }));
+    document.body.appendChild(bar);
+    return bar;
+  }
 
   function showTypingHint() {
     if (!editing) return;
-    const { node, rich, path } = editing;
-    if (!typingHint) {
-      typingHint = h('div', { class: 'adm-typing-hint', 'aria-hidden': 'true' });
-      document.body.appendChild(typingHint);
+    const { node } = editing;
+    if (!typingHint || typingHint._for !== node) {
+      hideTypingHint();
+      typingHint = buildTypingHint();
+      typingHint._for = node;
     }
-    typingHint.textContent = rich ? 'Empty line: new paragraph · Ctrl+Enter: done · Esc: cancel'
-      : /^about\.paragraphs\./.test(path) && !translating('paragraphs') ? 'Enter: new paragraph · Click elsewhere: done · Esc: cancel'
-        : 'Enter: done · Esc: cancel';
+    if (editing.marks) updateFormatBar();
     const box = node.getBoundingClientRect();
-    typingHint.style.left = `${Math.max(box.left + window.scrollX, 8)}px`;
-    typingHint.style.top = `${box.bottom + window.scrollY + 10}px`;
+    const header = document.querySelector('.site-header');
+    const roof = header ? Math.max(header.getBoundingClientRect().bottom, 0) : 0;
+    const height = typingHint.offsetHeight;
+    const above = !window.matchMedia('(pointer: coarse)').matches && box.top - height - 10 >= roof + 4;
+    const room = document.documentElement.clientWidth - typingHint.offsetWidth - 8;
+    typingHint.classList.toggle('is-below', !above);
+    typingHint.style.left = `${Math.max(Math.min(box.left, room), 8) + window.scrollX}px`;
+    typingHint.style.top = `${(above ? box.top - height - 10 : box.bottom + 10) + window.scrollY}px`;
   }
+
+  function updateFormatBar() {
+    if (!typingHint || !editing || !editing.marks) return;
+    const now = selectionState();
+    typingHint.querySelectorAll('.adm-fmt').forEach((button) => {
+      const name = button.dataset.fmt;
+      const spacing = name.startsWith('ls:');
+      const on = spacing ? now.spacing === name.slice(3) : now[name];
+      button.classList.toggle('is-active', Boolean(on));
+      button.setAttribute('aria-pressed', String(Boolean(on)));
+      // B, I and link need words selected; spacing without a selection is for the whole text
+      button.disabled = !spacing && !now.has;
+    });
+  }
+
+  // It follows the text when the page moves under it (the panel docking, the window resizing)
+  document.addEventListener('selectionchange', () => { if (editing && typingHint) showTypingHint(); });
+  new ResizeObserver(() => { if (editing && typingHint) showTypingHint(); }).observe(document.body);
 
   function hideTypingHint() {
     if (typingHint) typingHint.remove();
@@ -1428,7 +1740,7 @@
   // Clicking outside the text being typed finishes it (clicks in the panel don't, so you can check the form)
   document.addEventListener('pointerdown', (e) => {
     if (!e.target.closest) return;
-    if (editing && !editing.node.contains(e.target) && !e.target.closest('.adm-root, .adm-edge')) stopEditing();
+    if (editing && !editing.node.contains(e.target) && !e.target.closest('.adm-root, .adm-edge, .adm-typing-hint')) stopEditing();
     if (!e.target.closest('.adm-insert, .adm-bar-pop')) document.querySelectorAll('.adm-insert-menu').forEach((menu) => { menu.hidden = true; });
     if (!e.target.closest('.adm-more-wrap')) document.querySelectorAll('.adm-menu').forEach((menu) => { menu.hidden = true; });
   }, true);
@@ -3138,10 +3450,20 @@
   }
 
   // A text box with buttons for the simple formatting the page understands (see richText in js/main.js)
-  const FORMAT_HINT = 'Leave an empty line between paragraphs. **bold**, *italic*, [link text](https://…), and lines starting with "- " make a list.';
+  const FORMAT_HINT = 'Leave an empty line between paragraphs. **bold**, *italic*, [link text](https://…), [[wide:words]] for letter spacing, and lines starting with "- " make a list.';
 
   function richArea(obj, key, rows) {
     const box = area(obj, key, rows);
+    return h('div', { class: 'adm-rich' }, formatTools(box, true), box);
+  }
+
+  // A one-line text (or short text box) with B, I, link and spacing. The box comes first so a label
+  // around it points at the box, not a button; the buttons still show above it.
+  function formattable(box) {
+    return h('div', { class: 'adm-rich adm-rich-line' }, box, formatTools(box, false));
+  }
+
+  function formatTools(box, lists) {
     const typed = () => box.dispatchEvent(new Event('input', { bubbles: true }));
     const wrap = (before, after, placeholder) => {
       const { selectionStart: a, selectionEnd: b, value } = box;
@@ -3171,13 +3493,22 @@
     };
     // mousedown is stopped so the text box keeps its selection
     const tool = (label, title, run) => h('button', { class: 'adm-tool', type: 'button', text: label, title, 'aria-label': title, onmousedown: (e) => e.preventDefault(), onclick: run });
-    return h('div', { class: 'adm-rich' },
-      h('div', { class: 'adm-tools' },
-        tool('B', 'Bold', () => wrap('**', '**', 'bold text')),
-        tool('I', 'Italic', () => wrap('*', '*', 'italic text')),
-        tool('Link', 'Link', link),
-        tool('• List', 'List', listLines)),
-      box);
+    const spacing = h('select', {
+      class: 'adm-tool-select',
+      title: 'Letter spacing for the selected words',
+      'aria-label': 'Letter spacing',
+      onchange: (e) => {
+        const name = e.target.value;
+        e.target.value = '';
+        if (name) wrap(`[[${name}:`, ']]', 'spaced words');
+      },
+    }, h('option', { value: '', text: 'Spacing…' }), SPACINGS.filter(([name]) => name).map(([name, label]) => h('option', { value: name, text: label })));
+    return h('div', { class: 'adm-tools' },
+      tool('B', 'Bold', () => wrap('**', '**', 'bold text')),
+      tool('I', 'Italic', () => wrap('*', '*', 'italic text')),
+      tool('Link', 'Link', link),
+      lists ? tool('• List', 'List', listLines) : null,
+      spacing);
   }
 
   // Buttons of a Text or Call-to-action section
@@ -3220,7 +3551,7 @@
   // ---------- Site tab ----------
   function siteTab() {
     const site = state.draft.site;
-    const name = site.name.trim() || 'Your Name';
+    const name = window.SiteText.plain(site.name.trim()) || 'Your Name';
     return h('div', { class: 'adm-form' },
       h('div', { class: 'adm-section-head' },
         h('p', { class: 'adm-help', text: 'Who the site belongs to and where it links to. Your name shows in the top section, the logo, the footer and the browser tab.' }),
@@ -3230,7 +3561,7 @@
       h('div', { class: 'adm-form adm-group-box', 'data-adm-section': 'site' },
         h('h3', { class: 'adm-group', text: 'You' }),
         h('div', { class: 'adm-row2' },
-          field('Full name', text(site, 'name', { placeholder: 'e.g. Sam Janssens' })),
+          field('Full name', formattable(text(site, 'name', { placeholder: 'e.g. Sam Janssens' })), 'Formatting shows in the big heading only; the logo, footer and browser tab use the words.'),
           field('Short name', text(site, 'shortName', { placeholder: name.split(/\s+/)[0] }), 'Used in the contact form note. Empty uses your first name.')),
         h('p', { class: 'adm-hint', text: 'The logo shows the first word of your name in the text colour and the rest in the accent colour.' })),
       h('div', { class: 'adm-form adm-group-box' },
@@ -3799,12 +4130,78 @@
   // For Theme sliders: the page restyles while one is dragged
   const restyle = (theme) => () => window.SiteTheme.apply(theme);
 
+  // ---------- Font styles (Theme tab) ----------
+  // Weights are picked from the ones the font has (see fontWeights in js/main.js)
+  const WEIGHT_NAMES = { 100: 'Thin', 200: 'Extra light', 300: 'Light', 400: 'Regular', 500: 'Medium', 600: 'Semibold', 700: 'Bold', 800: 'Extra bold', 900: 'Black' };
+  const nearestOf = (weights, wanted) => weights.reduce((best, w) => (Math.abs(w - wanted) < Math.abs(best - wanted) ? w : best));
+
+  function weightSlider(theme, key, label, family) {
+    const weights = window.SiteTheme.fontWeights(theme, family);
+    const name = (w) => `${WEIGHT_NAMES[w] || w} (${w})`;
+    if (weights.length < 2) return field(label, h('span', { class: 'adm-hint', text: `${name(weights[0])}: this font comes in one weight.` }));
+    const shown = h('span', { class: 'adm-value', text: name(nearestOf(weights, theme[key])) });
+    return h('label', { class: 'adm-field' },
+      h('span', { class: 'adm-label' }, label, ' ', shown),
+      h('input', {
+        type: 'range', min: 0, max: weights.length - 1, step: 1, value: weights.indexOf(nearestOf(weights, theme[key])),
+        oninput: (e) => {
+          theme[key] = weights[Number(e.target.value)];
+          shown.textContent = name(theme[key]);
+          window.SiteTheme.apply(theme);
+          scheduleHistory();
+        },
+        onchange: () => changed(),
+      }));
+  }
+
+  // Two buttons side by side, e.g. Normal / Italic
+  function styleSegs(theme, key, label, options) {
+    return h('div', { class: 'adm-visitors' },
+      h('span', { class: 'adm-label', text: label }),
+      h('div', { class: 'adm-segs' }, options.map(([value, text, title]) => h('button', {
+        class: `adm-seg${theme[key] === value ? ' is-active' : ''}`,
+        type: 'button',
+        'aria-pressed': String(theme[key] === value),
+        text,
+        title,
+        onclick: () => {
+          if (theme[key] === value) return;
+          theme[key] = value;
+          window.SiteTheme.apply(theme);
+          redraw();
+        },
+      }))));
+  }
+
+  function textStyleBox(theme) {
+    return h('div', { class: 'adm-font-styles' },
+      weightSlider(theme, 'textWeight', 'Weight', theme.font),
+      weightSlider(theme, 'boldWeight', 'Bold text', theme.font),
+      slider(theme, 'textSpacing', 'Letter spacing', -5, 20, 1, '', null, restyle(theme)),
+      slider(theme, 'textSize', 'Size', 85, 130, 5, '%', 'Paragraphs, intros and card text. Headings and buttons keep their size.', restyle(theme)));
+  }
+
+  function headingStyleBox(theme) {
+    const family = theme.headingFont || theme.font;
+    const ownItalic = window.SiteTheme.italics.includes(family) || theme.customFonts.some((f) => f.name.trim() === family && f.style === 'italic');
+    return h('div', { class: 'adm-font-styles' },
+      weightSlider(theme, 'headingWeight', 'Weight', family),
+      weightSlider(theme, 'headingBold', 'Bold words', family),
+      slider(theme, 'headingSpacing', 'Letter spacing', -10, 30, 1, '', null, restyle(theme)),
+      h('div', { class: 'adm-inline' },
+        styleSegs(theme, 'headingItalic', 'Style', [[false, 'Normal'], [true, 'Italic']]),
+        styleSegs(theme, 'headingCase', 'Letters', [['upper', 'AA', 'All capitals'], ['normal', 'Aa', 'As typed']])),
+      theme.headingItalic && !ownItalic ? h('p', { class: 'adm-hint', text: 'This font has no italic letters of its own, so the browser slants the normal ones.' }) : null);
+  }
+
   function fontsBox(theme) {
     return h('div', { class: 'adm-form adm-group-box' },
       h('h3', { class: 'adm-group', text: 'Fonts' }),
       fontPicker(theme, 'font', 'Text'),
+      textStyleBox(theme),
       fontPicker(theme, 'headingFont', 'Headings', 'Same as the text'),
-      h('p', { class: 'adm-hint', text: 'Headings are your name, the section titles, card titles and the logo.' }),
+      headingStyleBox(theme),
+      h('p', { class: 'adm-hint', text: 'Headings are your name, the section titles, card titles and the logo. Bold words: the ones you make bold in a heading. Letter spacing 0 is the font’s own.' }),
       check(theme, 'titleDot', 'A full stop in the accent colour after section titles'),
       ownFontsOpen || theme.customFonts.length ? customFontsBox(theme)
         : h('div', null, h('button', { class: 'adm-btn', type: 'button', text: '+ Your own font', onclick: () => { ownFontsOpen = true; redraw(); } })));
@@ -4150,7 +4547,7 @@
   // What a row is called: its title, else the standard title
   function sectionLabel(id) {
     const own = (state.draft.sections[id] || {}).title;
-    if (own && own.trim()) return own.trim();
+    if (own && own.trim()) return window.SiteText.plain(own.trim());
     if (SECTION_KEYS[id]) return uiDefault(SECTION_KEYS[id][0]) || SECTION_NAMES[id];
     const kind = kindOf(id);
     return kind === 'grid' ? uiDefault('work.title') : kind === 'text' ? '(untitled section)' : KIND_LABELS[kind];
@@ -4179,7 +4576,7 @@
   function titleField(id, set) {
     const keys = SECTION_KEYS[id];
     const titleHint = keys ? uiDefault(keys[0]) : kindOf(id) === 'grid' ? uiDefault('work.title') : '';
-    return field('Title', text(set, 'title', { placeholder: titleHint, onchange: () => rerenderTab() }));
+    return field('Title', formattable(text(set, 'title', { placeholder: titleHint, onchange: () => rerenderTab() })));
   }
 
   // Layout: the arrangement, the look and the parts
@@ -4359,7 +4756,7 @@
   function reelEditor() {
     return [
       partToggles([['reel.intro', 'Intro line'], ['reel.video', 'Video (or the “coming soon” box)']]),
-      field('Intro line', area(state.draft.intros, 'reel', 2)),
+      field('Intro line', formattable(area(state.draft.intros, 'reel', 2))),
       reelTab(),
     ];
   }
@@ -4381,7 +4778,7 @@
     return [
       partToggles([['contact.intro', 'Intro line'], ['contact.form', 'Message form'], ['contact.linkedin', 'LinkedIn button'],
         ['contact.socials', 'Social icons'], ['contact.email', 'Email address']]),
-      field('Intro line', area(state.draft.intros, 'contact', 2)),
+      field('Intro line', formattable(area(state.draft.intros, 'contact', 2))),
       formTitleField(),
       h('p', { class: 'adm-hint', text: 'Your email address, social links and how the form sends messages are in the Site tab.' }),
     ];
@@ -4394,7 +4791,7 @@
   const alignChoice = (sec) => choice(sec, 'align', 'Alignment', [['left', 'Left'], ['center', 'Centred']]);
 
   function introField(sec) {
-    return h('div', { class: 'adm-row2' }, field('Intro line (optional)', area(sec, 'intro', 2)), alignChoice(sec));
+    return h('div', { class: 'adm-row2' }, field('Intro line (optional)', formattable(area(sec, 'intro', 2))), alignChoice(sec));
   }
 
   function textEditor(sec) {
@@ -4435,7 +4832,7 @@
         const path = sectionFile(sec, 'cover', file);
         if (path) { sec.thumb = path; rerenderTab(); }
       }, () => { sec.thumb = ''; rerenderTab(); }, 'Shown until the video plays.'),
-      field('Caption (optional)', text(sec, 'caption'), 'A line under the video.'));
+      field('Caption (optional)', formattable(text(sec, 'caption')), 'A line under the video.'));
   }
 
   function quotesEditor(sec) {
@@ -4488,7 +4885,7 @@
         make: () => ({ ...ITEM_FIELDS.numbers }),
         form: (item) => h('div', { class: 'adm-row2' },
           field('Number', text(item, 'value', { placeholder: 'e.g. 120+' })),
-          field('What it counts', text(item, 'label', { placeholder: 'e.g. videos edited' }))),
+          field('What it counts', formattable(text(item, 'label', { placeholder: 'e.g. videos edited' })))),
       }));
   }
 
@@ -4500,7 +4897,7 @@
         label: (item) => item.q,
         make: () => ({ ...ITEM_FIELDS.faq }),
         form: (item) => [
-          field('Question', text(item, 'q', { placeholder: 'e.g. How long does a project take?' })),
+          field('Question', formattable(text(item, 'q', { placeholder: 'e.g. How long does a project take?' }))),
           block('Answer', richArea(item, 'a', 4)),
         ],
       }));
@@ -4508,8 +4905,8 @@
 
   function ctaEditor(sec) {
     return h('div', { class: 'adm-form' },
-      field('Big line', area(sec, 'text', 2), 'e.g. Let’s make something together.'),
-      field('Line under it (optional)', area(sec, 'sub', 2)),
+      field('Big line', formattable(area(sec, 'text', 2)), 'e.g. Let’s make something together.'),
+      field('Line under it (optional)', formattable(area(sec, 'sub', 2))),
       alignChoice(sec),
       buttonsEditor(sec.buttons));
   }
@@ -4541,7 +4938,7 @@
 
     return [
       partToggles([[`${id}.intro`, 'Intro line'], [`${id}.highlights`, 'Highlights slider'], [`${id}.filters`, 'Filter buttons'], [`${id}.grid`, 'Project cards']]),
-      field('Intro line', id === 'work' ? area(c.intros, 'work', 2) : area(grid, 'intro', 2)),
+      field('Intro line', formattable(id === 'work' ? area(c.intros, 'work', 2) : area(grid, 'intro', 2))),
       h('div', { class: 'adm-form adm-group-box' },
         h('h3', { class: 'adm-group', text: 'Projects shown here' }),
         h('div', { class: 'adm-checks' }, c.categories.map((cat) => h('label', { class: 'adm-check' },
@@ -5168,8 +5565,8 @@
         field('Client', text(item, 'client', { placeholder: 'e.g. StartupAwards' })),
         field('Year', text(item, 'year', { placeholder: 'e.g. 2025' })),
         field('Your role', text(item, 'role', { placeholder: 'e.g. Editing, sound' }))),
-      field('Teaser (shown on the card)', text(item, 'teaser')),
-      field('Full description (shown when the project is opened)', area(item, 'desc', 5)),
+      field('Teaser (shown on the card)', formattable(text(item, 'teaser'))),
+      field('Full description (shown when the project is opened)', formattable(area(item, 'desc', 5))),
       field('Tools', list(item, 'tools', { placeholder: 'Premiere Pro, After Effects' }), 'Separate with commas.'),
       videosField(item),
       picturesField(item.images, item.title, { empty: 'Shown in the pop-up after the videos, with arrows and thumbnails. You can pick several files at once.' }),
@@ -5397,9 +5794,9 @@
         slider(set, 'portraitSize', 'Picture size', 50, 120, 5, '%')) : null,
       h('div', { class: 'adm-form', 'data-adm-section': 'hero' },
         group('Text',
-          field('Line under your name', text(c.hero, 'role')),
-          field('Intro paragraph', area(c.hero, 'intro', 3)),
-          field('Location and availability', text(c.hero, 'availability')))),
+          field('Line under your name', formattable(text(c.hero, 'role'))),
+          field('Intro paragraph', formattable(area(c.hero, 'intro', 3))),
+          field('Location and availability', formattable(text(c.hero, 'availability'))))),
       group('Layout',
         check(set, 'nameOneLine', 'Name on one line (across the whole width)'),
         slider(set, 'nameScale', 'Name size', 60, 140, 5, '%', 'It never grows wider than the space it has.'),
@@ -5505,9 +5902,9 @@
       entries.map((entry, i) => h('div', { class: 'adm-entry is-open' },
         h('div', { class: 'adm-entry-head' }, bind(h('strong', { text: entry.role || '(new entry)' }), entry, 'role', '(new entry)'), rowControls(entries, i, 'entry')),
         h('div', { class: 'adm-form' },
-          h('div', { class: 'adm-row2' }, field('Dates', text(entry, 'date', { placeholder: '2024 – Present' })), field('Role', text(entry, 'role'))),
+          h('div', { class: 'adm-row2' }, field('Dates', text(entry, 'date', { placeholder: '2024 – Present' })), field('Role', formattable(text(entry, 'role')))),
           field('Company or project', text(entry, 'org')),
-          field('What you did', area(entry, 'text', 3))))));
+          field('What you did', formattable(area(entry, 'text', 3)))))));
   }
 
   function toolkitTab() {
@@ -5637,7 +6034,8 @@
   function withSiteDetails(html, content) {
     const T = window.SiteTheme;
     const site = content.site;
-    const name = site.name.trim();
+    const raw = site.name.trim();
+    const name = window.SiteText.plain(raw);
     const words = name.split(/\s+/);
     const title = site.title.trim() || `${name} Portfolio`;
     const description = site.description.trim() || `${name}'s portfolio.`;
