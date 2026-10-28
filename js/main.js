@@ -2327,7 +2327,12 @@ function matchHeroFade() {
     .find((s) => s && !s.classList.contains('is-removed'));
   const hero = document.querySelector('.hero');
   const next = after || document.querySelector('.site-footer');
-  if (next) hero.style.setProperty('--after-hero', getComputedStyle(next).backgroundColor);
+  if (!next) return;
+  // The colour it's set to, not the one it shows: while dark and light fade over, that's still the old one
+  const colour = next.classList.contains('bg-main') || next.classList.contains('site-footer') ? 'var(--bg)'
+    : next.classList.contains('bg-alt') ? 'var(--bg-alt)'
+      : next.style.backgroundColor || getComputedStyle(next).backgroundColor;
+  hero.style.setProperty('--after-hero', colour);
 }
 
 let currentContent = {};
