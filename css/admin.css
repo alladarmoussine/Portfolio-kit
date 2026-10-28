@@ -1155,8 +1155,10 @@ html:not(.adm-editing) [data-placeholder].is-empty,
 .adm-tool:hover { border-color: var(--border); background: var(--surface); }
 .adm-tool[title="Bold"] { font-weight: 800; }
 .adm-tool[title="Italic"] { font-style: italic; }
-.adm-tool-select { margin-left: auto; padding: 2px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 0.8rem; cursor: pointer; }
-.adm-tool-select:hover { border-color: var(--border); background: var(--surface); }
+.adm-root .adm-tool-select { width: auto; min-width: 0; margin-left: auto; padding: 2px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 0.8rem; cursor: pointer; }
+.adm-root .adm-tool-select:hover { border-color: var(--border); background: var(--surface); }
+/* In a narrow box (half a row) the buttons wrap instead of squeezing */
+.adm-rich-line > .adm-tools { flex-wrap: wrap; }
 
 /* A one-line box with the buttons: the box comes first in the page code, the buttons show above it */
 .adm-rich-line > .adm-tools { order: -1; }
