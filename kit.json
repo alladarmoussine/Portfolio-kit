@@ -1,9 +1,9 @@
 {
   "kit": "alladarmoussine/portfolio-kit",
   "source": "alladarmoussine/AlladarMoussineSite",
-  "build": 33,
+  "build": 34,
   "date": "2026-10-29",
-  "commit": "52f4276",
+  "commit": "7e6be52",
   "files": [
     ".gitattributes",
     "404.html",
@@ -17,6 +17,11 @@
     "starter/site.js"
   ],
   "notes": [
+    {
+      "build": 34,
+      "date": "2026-10-29",
+      "message": "Admin: update site content"
+    },
     {
       "build": 33,
       "date": "2026-10-29",
