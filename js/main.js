@@ -371,6 +371,7 @@ function youtubeEmbed(id, title, autoplay) {
 const reelFrame = document.getElementById('reel-frame');
 const reelPlaceholder = reelFrame.innerHTML;
 let workItems = []; // content.work, for the project pop-up
+let workSource = []; // the same projects as given (not translated), to find the open one again after a move
 
 // A project can hold several videos (item.videos); content saved before that had one video on the item itself
 function projectVideos(item) {
@@ -577,7 +578,7 @@ function renderGrid(g, entries, settings, shown = categories) {
   const buttons = isEditing() ? shown : used;
   if (g.filter !== 'all' && !buttons.some((cat) => cat.id === g.filter)) g.filter = 'all';
   g.bar.querySelectorAll('.filter-btn').forEach((btn) => btn.remove());
-  g.bar.hidden = buttons.length < 2;
+  g.bar.hidden = buttons.length < 2 && !isEditing(); // while editing it holds "+ Add category" too
   [['all', t('work.all')], ...buttons.map((cat) => [cat.id, typeLabel(cat.id)])].forEach(([id, label]) => {
     const empty = id !== 'all' && !used.some((cat) => cat.id === id);
     const btn = el('button', `filter-btn${id === g.filter ? ' is-active' : ''}${empty ? ' is-empty' : ''}`, label);
@@ -732,6 +733,32 @@ function renderAbout(about) {
   const photo = document.getElementById('about-photo-img');
   if (about.photo) photo.src = assetUrl(about.photo);
   else photo.closest('.about-photo').classList.add('is-removed');
+  applyPhotoLook(document.getElementById('about'), photo.closest('.about-photo'), about.photoLook);
+}
+
+// How a photo sits in its frame and on the page (content.about.photoLook; admin: on the photo itself, or
+// the About editor). x / y: the point that stays in view (% across and down); zoom: 1–3, around that point;
+// size: 'small' | 'medium' | 'large'; frame: 'edge' (to the screen edge) | 'card' | 'arch';
+// strip: 'edge' (along its inner edge) | 'offset' (a block behind it) | 'none'; accent: the strip's colour,
+// 'accent2' | 'accent' | 'text' | 'lines'; align: 'top' | 'center' (the text beside it lines up with its
+// top or its middle)
+const PHOTO_LOOK = { x: 50, y: 40, zoom: 1, size: 'large', frame: 'edge', strip: 'edge', accent: 'accent2', align: 'top' };
+const PHOTO_ACCENTS = { accent2: 'var(--accent-orange)', accent: 'var(--accent)', text: 'var(--text)', lines: 'var(--border)' };
+window.PHOTO_LOOK = PHOTO_LOOK;
+// Used by the admin panel while the photo is dragged (applyPhotoLook is hoisted)
+window.SitePhoto = { apply: (section, frame, look) => applyPhotoLook(section, frame, look) };
+const clampNumber = (value, min, max, fallback) => (Number.isFinite(Number(value)) ? Math.min(Math.max(Number(value), min), max) : fallback);
+
+function applyPhotoLook(section, frame, look) {
+  const set = { ...PHOTO_LOOK, ...(look || {}) };
+  frame.style.setProperty('--photo-x', `${clampNumber(set.x, 0, 100, 50)}%`);
+  frame.style.setProperty('--photo-y', `${clampNumber(set.y, 0, 100, 40)}%`);
+  frame.style.setProperty('--photo-zoom', String(clampNumber(set.zoom, 1, 3, 1)));
+  section.dataset.photoSize = ['small', 'medium', 'large'].includes(set.size) ? set.size : 'large';
+  section.dataset.photoFrame = ['edge', 'card', 'arch'].includes(set.frame) ? set.frame : 'edge';
+  section.dataset.photoStrip = ['edge', 'offset', 'none'].includes(set.strip) ? set.strip : 'edge';
+  section.style.setProperty('--photo-accent', PHOTO_ACCENTS[set.accent] || PHOTO_ACCENTS.accent2);
+  section.dataset.photoAlign = set.align === 'center' ? 'center' : 'top';
 }
 
 function renderExperience(entries) {
@@ -1406,16 +1433,39 @@ function colourVars(c, heroText) {
   const dark = c.mode !== 'light';
   // The top section is always a dark stage: on a light theme it gets light text of its own,
   // unless the Theme tab sets one
-  const hero = dark
+  let hero = dark
     ? { text: c.text, dim: c.textDim, border: c.border }
     : { text: '#f5f6f8', dim: '#a3a9b3', border: '#2c313a' };
+  // Text that wouldn't read on the top section's background (e.g. dark text left on a dark theme):
+  // light text on a dark background, dark on a light one
+  if (isHexColor(c.heroBg) && isHexColor(hero.text) && contrast(hero.text, c.heroBg) < 3) {
+    hero = isLightColor(c.heroBg)
+      ? { text: '#15151a', dim: '#55555e', border: '#d6d6cf' }
+      : { text: '#f5f6f8', dim: '#a3a9b3', border: '#2c313a' };
+  }
   if (heroText) {
     hero.text = heroText;
     hero.dim = `color-mix(in srgb, ${heroText} 62%, transparent)`;
   }
+  // A light top section: the monitor as a card a little lighter than it, with a soft shadow; timeline
+  // clips faded (not darkened) until they play, with their names in the top text (on the playing one, the
+  // colour for text on the accent); audio with light stripes. `initial`: the look for a dark top (style.css).
+  const stage = isLightColor(c.heroBg)
+    ? {
+      monitor: `color-mix(in srgb, #fff 65%, ${c.heroBg})`, monitorBorder: `color-mix(in srgb, ${hero.text} 16%, transparent)`,
+      shadow: '0 18px 50px rgba(0, 0, 0, 0.12)', rest: 'opacity(0.4)', name: hero.text, live: c.onAccent,
+      wave: 'rgba(255, 255, 255, 0.45)', audio: 'saturate(0.75) brightness(1.08)',
+    }
+    : {
+      monitor: 'initial', monitorBorder: 'initial',
+      shadow: '0 30px 80px rgba(0, 0, 0, 0.5)', rest: 'brightness(0.55)', name: '#fff', live: '#fff',
+      wave: 'rgba(5, 7, 10, 0.4)', audio: 'none',
+    };
   return `--bg:${c.bg};--bg-alt:${c.bgAlt};--surface:${c.surface};--border:${c.border};--text:${c.text};--text-dim:${c.textDim};`
     + `--accent:${c.accent};--accent-dark:${c.accentDark};--accent-orange:${c.accent2};--on-accent:${c.onAccent};`
     + `--hero-bg:${c.heroBg};--hero-text:${hero.text};--hero-text-dim:${hero.dim};--hero-border:${hero.border};`
+    + `--hero-monitor:${stage.monitor};--hero-monitor-border:${stage.monitorBorder};--hero-shadow:${stage.shadow};`
+    + `--tl-rest:${stage.rest};--tl-name:${stage.name};--tl-name-live:${stage.live};--tl-wave:${stage.wave};--tl-audio-live:${stage.audio};`
     + `color-scheme:${dark ? 'dark' : 'light'};`;
 }
 
@@ -1426,7 +1476,9 @@ function themeCss(theme, forFile) {
   const main = themeColors(set);
   const own = set.colors || {};
   const radius = Math.min(Math.max(Number(set.radius ?? 14), 0), 32);
-  let css = `:root{${colourVars(main, own.heroText)}`
+  // html:root outranks the defaults at the top of style.css even when style.css comes later (a dev server
+  // reloading changed stylesheets puts them last); the second version's rules still outrank it
+  let css = `html:root{${colourVars(main, own.heroText)}`
     + `--radius:${radius}px;--title-dot:${set.titleDot === false ? 'none' : '"."'};--font-body:${fontStack(set.font || 'Geologica')};--font-heading:${fontStack(set.headingFont || set.font || 'Geologica')};${fontStyleVars(set)}}`;
   if (set.switchable) {
     const other = themeColors(set, 'other');
@@ -1537,7 +1589,7 @@ prefersLight.addEventListener('change', () => { if (modeSet.switchable && !chose
 // (the panel uses it while a colour or a Theme slider is dragged)
 window.SiteTheme = {
   presets: THEME_PRESETS, fonts: THEME_FONTS, italics: THEME_ITALICS, fontWeights, fontStyle: FONT_STYLE_DEFAULTS, colors: themeColors, css: themeCss, fontsHref: themeFontsHref, favicon: faviconHref,
-  apply: (theme) => { applyTheme(theme); applyCursor(theme && theme.cursor); if (lookContent) applySectionLook(lookContent); matchHeroFade(); },
+  apply: (theme) => { applyTheme(theme); applyEffects(theme); applyCursor(theme && theme.cursor); if (lookContent) applySectionLook(lookContent); matchHeroFade(); },
   // The panel shows one version while it's edited ('' = the visitor's own again)
   showMode: (mode) => { previewMode = mode || ''; switchMode(); },
   shownMode: () => shownMode(),
@@ -1545,7 +1597,7 @@ window.SiteTheme = {
 };
 
 // ---------- Mouse effect (admin: Theme tab) ----------
-// content.theme.cursor = { style, size, color, grow, image, tip, glowSize, glowStrength, glowColor, magnetic, frames }
+// content.theme.cursor = { style, size, color, grow, image, tip, glowSize, glowStrength, glowColor, frames }
 // style: "off" (normal pointer), "dot", "label" (a dot that says View / Play over projects), "spotlight"
 // (normal pointer with a soft glow following it) or "image" (an uploaded picture as the pointer).
 // A pointer from a cursor file (.cur, .ani, Xcursor) is saved as a strip of frames side by side, with
@@ -1554,7 +1606,7 @@ window.SiteTheme = {
 // Only for a mouse or trackpad, and not for visitors who reduce motion: they keep the normal pointer.
 const CURSOR_DEFAULTS = {
   style: 'dot', size: 14, color: 'invert', grow: true, image: '', tip: 'center',
-  glowSize: 320, glowStrength: 18, glowColor: 'accent', magnetic: false,
+  glowSize: 320, glowStrength: 18, glowColor: 'accent',
 };
 window.CURSOR_DEFAULTS = CURSOR_DEFAULTS;
 const cursorAllowed = window.matchMedia('(hover: hover) and (pointer: fine)').matches
@@ -1610,7 +1662,7 @@ function onCursorMove(e) {
     cursorEl.classList.toggle('is-label', Boolean(project));
     cursorEl.classList.toggle('is-hover', !project && Boolean(cursorSet.grow) && Boolean(closest(CURSOR_HOVER)));
   }
-  if (cursorSet.magnetic) pullMagnet(e);
+  if (fx.gloopy) pullMagnet(e);
 }
 
 function setupCursor() {
@@ -1652,8 +1704,8 @@ function applyCursor(settings) {
   const picture = cursorSet.style === 'image' && cursorSet.image ? assetUrl(cursorSet.image) : '';
   const shape = cursorSet.style === 'image' && !picture ? 'dot' : cursorSet.style;
   root.classList.toggle('has-cursor', drawsPointer() && !isFullscreen());
-  root.classList.toggle('has-magnet', Boolean(cursorSet.magnetic));
-  if (!cursorSet.magnetic) releaseMagnet();
+  root.classList.toggle('has-magnet', fx.gloopy);
+  if (!fx.gloopy) releaseMagnet();
   cursorEl.hidden = !drawsPointer();
   glowEl.hidden = cursorSet.style !== 'spotlight';
   cursorEl.dataset.style = shape;
@@ -1694,6 +1746,217 @@ function playCursorFrames(frames) {
   next();
 }
 
+// ---------- Effects (content.theme.effects; admin: Theme tab, Effects) ----------
+// bop: buttons, project cards and contact icons lift under the mouse; gloopy: buttons drift toward it
+// (theme.cursor.magnetic before); squish: buttons give a little when pressed; tilt: project cards lean
+// toward the mouse (in place of their bop); reveal: '', 'fade' or 'slide' as items scroll into view;
+// click: { computer, phone }, what plays where a mouse clicks and where a finger taps (see CLICK_DEFAULTS).
+// None for visitors who reduce motion; the hover ones only with a mouse or trackpad.
+const EFFECT_DEFAULTS = {
+  bop: true, gloopy: false, squish: false, tilt: false, reveal: '',
+};
+window.EFFECT_DEFAULTS = EFFECT_DEFAULTS;
+// style: '' (none), 'burst', 'ripple', 'sparkle', 'image' (an uploaded animation, as a strip of frames
+// side by side: frames { count, width, height, delays }), or for phones 'same' (as on computers).
+// color: 'accent', 'accent2', 'white' or 'invert'; size: px across; tip: 'center' or 'top-left'.
+const CLICK_DEFAULTS = { style: '', color: 'accent', size: 56, image: '', tip: 'center' };
+window.CLICK_DEFAULTS = CLICK_DEFAULTS;
+const effectsOf = (theme) => {
+  const own = (theme && theme.effects) || {};
+  const click = own.click || {};
+  return {
+    ...EFFECT_DEFAULTS,
+    gloopy: Boolean(theme && theme.cursor && theme.cursor.magnetic),
+    ...own,
+    click: {
+      computer: { ...CLICK_DEFAULTS, ...(click.computer || {}) },
+      phone: { ...CLICK_DEFAULTS, style: 'same', ...(click.phone || {}) },
+    },
+  };
+};
+let fx = { ...EFFECT_DEFAULTS };
+let effectsReady = false;
+
+function applyEffects(theme) {
+  fx = effectsOf(theme);
+  if (prefersStill) fx = { ...fx, bop: false, gloopy: false, squish: false, tilt: false, reveal: '' };
+  const root = document.documentElement;
+  root.classList.toggle('fx-no-bop', !fx.bop);
+  root.classList.toggle('fx-tilt', fx.tilt && cursorAllowed);
+  if (!fx.tilt) untiltCard();
+  if (effectsReady || prefersStill) return;
+  effectsReady = true;
+  document.addEventListener('pointerdown', squishDown);
+  document.addEventListener('pointerdown', clickAnimation);
+  document.addEventListener('pointerup', squishUp);
+  document.addEventListener('pointercancel', squishUp);
+  if (!cursorAllowed) return;
+  document.addEventListener('pointermove', tiltCard);
+  document.addEventListener('pointerout', (e) => { if (!e.relatedTarget) untiltCard(); });
+}
+
+// Press squish: in while held, a small spring out when let go (`scale`, so the bop and pull still apply)
+let pressed = null;
+function squishDown(e) {
+  if (!fx.squish || e.button > 0 || !e.target.closest) return;
+  const target = e.target.closest(MAGNETIC);
+  if (!target || !target.animate) return;
+  pressed = { target, anim: target.animate([{ scale: 1 }, { scale: 0.93 }], { duration: 90, easing: 'ease-out', fill: 'forwards' }) };
+}
+
+function squishUp() {
+  if (!pressed) return;
+  pressed.anim.cancel();
+  pressed.target.animate([{ scale: 0.93 }, { scale: 1.04 }, { scale: 1 }], { duration: 320, easing: 'ease-out' });
+  pressed = null;
+}
+
+// 3D card tilt: the card under the mouse leans toward it (not while its text is being typed in)
+let tilted = null;
+function untiltCard() {
+  if (tilted) tilted.style.transform = '';
+  tilted = null;
+}
+
+function tiltCard(e) {
+  const card = fx.tilt && e.pointerType !== 'touch' && e.target.closest ? e.target.closest('.work-card') : null;
+  if (card !== tilted) untiltCard();
+  if (!card || card.querySelector('.adm-typing')) return;
+  tilted = card;
+  const box = card.getBoundingClientRect();
+  const x = (e.clientX - box.left) / box.width - 0.5;
+  const y = (e.clientY - box.top) / box.height - 0.5;
+  card.style.transform = `perspective(900px) rotateX(${(-y * 13).toFixed(2)}deg) rotateY(${(x * 13).toFixed(2)}deg) scale(1.02)`;
+}
+
+// Scroll reveal: list items and the parts of each section come in one after another as they scroll into
+// view (headings keep their own letter reveal). While editing everything shows at once; Preview plays it.
+let revealObserver = null;
+function revealOnScroll() {
+  if (revealObserver) revealObserver.disconnect();
+  const root = document.documentElement;
+  const kind = isEditing() || !('IntersectionObserver' in window) ? '' : fx.reveal;
+  if (kind !== 'fade' && kind !== 'slide') {
+    delete root.dataset.reveal;
+    return;
+  }
+  root.dataset.reveal = kind;
+  revealObserver = new IntersectionObserver((entries) => {
+    let n = 0;
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const node = entry.target;
+      revealObserver.unobserve(node);
+      node.style.setProperty('--fx-delay', `${Math.min(n++, 6) * 70}ms`);
+      node.classList.add('fx-in', 'fx-showing');
+      // Afterwards its own hover transitions apply again
+      setTimeout(() => node.classList.remove('fx-showing'), 1500);
+    });
+  }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+  revealTargets().forEach((node) => {
+    node.classList.add('fx-item');
+    node.classList.remove('fx-in');
+    revealObserver.observe(node);
+  });
+}
+
+// Click animation: plays where the mouse clicks (the computer one) or the finger taps (the phone one), then
+// goes; never in the way of the click. Not while editing (a click there starts typing): Play effects shows it.
+const CLICK_PARTS = { burst: 8, ripple: 1, sparkle: 7 };
+const CLICK_COLORS = { accent: 'var(--accent)', accent2: 'var(--accent-orange)', white: '#fff', invert: '#fff' };
+const clicksShown = [];
+
+function clickAnimation(e) {
+  if (e.button > 0 || isEditing()) return;
+  const set = fx.click[e.pointerType === 'touch' ? 'phone' : 'computer'];
+  playClick(set.style === 'same' ? fx.click.computer : set, e.clientX, e.clientY);
+}
+
+function playClick(set, x, y) {
+  const frames = set.style === 'image' && set.image && set.frames && set.frames.count > 0 ? set.frames : null;
+  if (!CLICK_PARTS[set.style] && !(set.style === 'image' && set.image)) return;
+  const size = Math.min(Math.max(Number(set.size) || 56, 16), 240);
+  const node = el('div', `click-fx click-${set.style}${set.color === 'invert' ? ' is-invert' : ''}${set.tip === 'top-left' ? ' is-corner' : ''}`);
+  node.setAttribute('aria-hidden', 'true');
+  node.style.left = `${x}px`;
+  node.style.top = `${y}px`;
+  node.style.setProperty('--click-size', `${size}px`);
+  node.style.setProperty('--click-color', CLICK_COLORS[set.color] || CLICK_COLORS.accent);
+  let time = 650;
+  if (set.style === 'image') {
+    // The frames one after another (a picture with one frame shows and fades)
+    const count = frames ? Math.min(Math.max(Math.round(frames.count), 1), 400) : 1;
+    const delays = frames && Array.isArray(frames.delays) ? frames.delays : [];
+    node.style.backgroundImage = `url("${cssString(assetUrl(set.image))}")`;
+    node.style.setProperty('--frames', String(count));
+    node.style.setProperty('--click-ratio', String(frames ? frames.height / frames.width : 1));
+    if (count > 1) {
+      let frame = 0;
+      let at = 0;
+      for (let i = 0; i < count; i++) {
+        const wait = Math.min(Math.max(Number(delays[i]) || 40, 16), 1000);
+        setTimeout(() => node.style.setProperty('--frame', String(frame++)), at);
+        at += wait;
+      }
+      time = at;
+    } else {
+      node.classList.add('is-still');
+    }
+  } else {
+    for (let i = 0; i < CLICK_PARTS[set.style]; i++) {
+      const part = el('span');
+      part.style.setProperty('--i', String(i));
+      // Sparkles fly a little unevenly
+      if (set.style === 'sparkle') part.style.setProperty('--spread', String(0.75 + Math.random() * 0.5));
+      node.appendChild(part);
+    }
+  }
+  document.body.appendChild(node);
+  clicksShown.push(node);
+  // A few at a time, however fast the clicks come
+  while (clicksShown.length > 4) clicksShown.shift().remove();
+  setTimeout(() => {
+    node.remove();
+    const at = clicksShown.indexOf(node);
+    if (at >= 0) clicksShown.splice(at, 1);
+  }, time);
+}
+
+// What comes in one after another: each list's items and the other parts of each section
+const revealTargets = () => [...document.querySelectorAll('main [data-entries] > [data-entry], main [data-block]')]
+  .filter((node) => !node.closest('.hero') && !node.matches('[data-entries], .reveal') && !node.querySelector('[data-entries], .reveal'));
+
+// The admin panel's "Play effects": the click animations (computer, then phone) in the middle of the
+// screen and the scroll reveal on what's on screen, once (they don't play by themselves while editing)
+function playEffects() {
+  const onScreen = (node) => {
+    const box = node.getBoundingClientRect();
+    return box.width > 0 && box.bottom > 0 && box.top < window.innerHeight;
+  };
+  const root = document.documentElement;
+  if (prefersStill) return;
+  const { computer, phone } = fx.click;
+  playClick(computer, window.innerWidth / 2, window.innerHeight / 2);
+  if (phone.style !== 'same') setTimeout(() => playClick(phone, window.innerWidth / 2, window.innerHeight / 2), 900);
+  if (fx.reveal !== 'fade' && fx.reveal !== 'slide') return;
+  const items = revealTargets().filter(onScreen);
+  root.dataset.reveal = fx.reveal;
+  items.forEach((node) => {
+    node.classList.add('fx-item');
+    node.classList.remove('fx-in', 'fx-showing');
+  });
+  void root.offsetWidth; // hidden first, so they come in from there
+  items.forEach((node, n) => {
+    node.style.setProperty('--fx-delay', `${Math.min(n, 12) * 70}ms`);
+    node.classList.add('fx-in', 'fx-showing');
+  });
+  setTimeout(() => {
+    items.forEach((node) => node.classList.remove('fx-showing'));
+    if (isEditing()) delete root.dataset.reveal;
+  }, 2200);
+}
+window.SiteEffects = { play: playEffects };
+
 // ---------- Your name and site details (admin: Site tab) ----------
 function renderIdentity(site, theme) {
   // The name may have formatting for the big heading; everywhere else it's the words alone
@@ -1724,6 +1987,10 @@ function renderIdentity(site, theme) {
 // Sections: the built-in ones below, extra Work grids (content.workGrids) and added sections
 // (content.customSections: Text, Gallery, Video and the other types in SECTION_TYPES).
 const BUILTIN_SECTIONS = ['about', 'reel', 'work', 'experience', 'toolkit', 'contact'];
+// FAQ questions opened (by their place in the content): they stay open when the page is drawn again,
+// which editing does after every change
+const openFaqs = new Set();
+
 const SECTION_TYPES = ['text', 'gallery', 'video', 'quotes', 'logos', 'numbers', 'faq', 'cta'];
 // What a section looks like when its settings don't say (Experience and Toolkit sit under Work with small titles)
 const SECTION_LOOK = {
@@ -2209,8 +2476,11 @@ const SECTION_BODIES = {
       if (!item || !(item.q || '').trim()) return;
       const entry = el('details', 'faq-item');
       entry.dataset.entry = `${path}.items.${n}`;
-      // Open while editing, so the answer can be typed in
-      entry.open = isEditing();
+      entry.open = openFaqs.has(entry.dataset.entry);
+      entry.addEventListener('toggle', () => {
+        if (entry.open) openFaqs.add(entry.dataset.entry);
+        else openFaqs.delete(entry.dataset.entry);
+      });
       const question = el('summary');
       question.appendChild(field(formatted(el('span'), item.q), `${path}.items.${n}.q`));
       entry.append(question, richText(item.a, 'faq-answer', `${path}.items.${n}.a`));
@@ -2499,12 +2769,23 @@ function renderSite(fullContent) {
   const content = localize(fullContent);
   categories = Array.isArray(content.categories) && content.categories.length ? content.categories : DEFAULT_CATEGORIES;
   applyTheme(content.theme);
+  applyEffects(content.theme);
   applyCursor(content.theme && content.theme.cursor);
   renderIdentity(content.site || {}, content.theme);
   const page = pagesOf(content).find((pg) => pg.id === currentPageId);
   if (page && (page.title || '').trim()) document.title = `${page.title.trim()} · ${document.title}`;
+  // The open project, wherever it is now (moving projects in the admin panel changes their places)
+  const openOne = openProjectIndex !== null ? workSource[openProjectIndex] : null;
+  workSource = [...(fullContent.work || [])]; // a copy: the panel moves projects inside the list itself
   workItems = content.work || [];
   projectSlugs = slugsFor(workItems);
+  const movedTo = openOne ? workSource.indexOf(openOne) : -1;
+  if (movedTo >= 0 && movedTo !== openProjectIndex) {
+    openProjectIndex = movedTo;
+    if (new URLSearchParams(window.location.search).has('project')) history.replaceState(null, '', projectUrl(projectSlugs[movedTo]));
+  }
+  // A project open while it's edited shows the new words
+  if (openProjectIndex !== null && !modal.hidden && workItems[openProjectIndex]) fillProjectText(workItems[openProjectIndex], openProjectIndex);
   projectView = fullContent.projectView === 'page' ? 'page' : 'popup';
   renderCustomSections(content);
   renderExtraGrids(content.workGrids || []);
@@ -2531,6 +2812,7 @@ function renderSite(fullContent) {
   renderToolkit(content.toolkit || []);
   applySectionLook(content);
   applyBlocks(content);
+  revealOnScroll();
   matchHeroFade();
 }
 
@@ -2854,15 +3136,7 @@ function fillProject(item, thumbSource) {
   else modalThumb.innerHTML = thumbSource.innerHTML;
 
   modal.classList.remove('is-gallery');
-  modalTag.hidden = false;
-  modalTag.textContent = typeLabel(item.type);
-  modalTitle.textContent = item.title;
-  modalTitle.hidden = false;
-  modalMeta.textContent = [item.client, item.year, item.role].filter(Boolean).join(' · ');
-  modalMeta.hidden = !modalMeta.textContent;
-  modalDesc.hidden = false;
-  modalDesc.textContent = '';
-  inlineText(modalDesc, item.desc || item.teaser);
+  fillProjectText(item, openProjectIndex);
 
   modalTools.innerHTML = '';
   (item.tools || []).filter(Boolean).forEach((tool) => modalTools.appendChild(el('span', 'skill-tag', tool)));
@@ -2879,6 +3153,25 @@ function fillProject(item, thumbSource) {
   });
 }
 
+// The pop-up's words, tagged so the admin panel can type in them (an empty description shows the
+// teaser, and typing there makes it the description). Text being typed is left alone.
+function fillProjectText(item, index) {
+  modalTag.hidden = false;
+  modalTag.textContent = typeLabel(item.type);
+  modalTitle.hidden = false;
+  modalMeta.textContent = [item.client, item.year, item.role].filter(Boolean).join(' · ');
+  modalMeta.hidden = !modalMeta.textContent;
+  modalDesc.hidden = false;
+  if (!modalTitle.classList.contains('adm-typing')) {
+    modalTitle.textContent = item.title;
+    field(modalTitle, `work.${index}.title`);
+  }
+  if (!modalDesc.classList.contains('adm-typing')) {
+    modalDesc.textContent = '';
+    field(formatted(modalDesc, item.desc || item.teaser), `work.${index}.desc`);
+  }
+}
+
 // A Gallery section's pictures in the same pop-up, with its title and each picture's caption
 function openPictures(images, index, title, opener) {
   modalItem = { title, images, videos: [], isGallery: true };
@@ -2886,6 +3179,8 @@ function openPictures(images, index, title, opener) {
   modal.classList.add('is-gallery');
   modalThumb.className = 'modal-thumb';
   modalTag.hidden = true;
+  delete modalTitle.dataset.field;
+  delete modalDesc.dataset.field;
   modalTitle.textContent = title;
   modalTitle.hidden = !title;
   modalMeta.hidden = true;
@@ -2941,9 +3236,29 @@ modal.addEventListener('click', (e) => {
   if (e.target === modal && !document.documentElement.classList.contains('is-project-page')) closeModal();
 });
 
+// Tab stays inside the pop-up (shown as a page of its own, the menu is still there to reach)
+const FOCUSABLE = 'a[href], button:not([disabled]), input, select, textarea, iframe, video[controls], [tabindex]:not([tabindex="-1"]), [contenteditable="true"], [contenteditable="plaintext-only"]';
+function keepFocusInModal(e) {
+  // The admin panel beside it keeps its own Tab order
+  if (document.activeElement && document.activeElement.closest && document.activeElement.closest('.adm-root')) return;
+  const stops = [...modal.querySelectorAll(FOCUSABLE)].filter((node) => node.getClientRects().length && !node.closest('[hidden]'));
+  if (!stops.length) return;
+  const first = stops[0];
+  const last = stops[stops.length - 1];
+  const inside = modal.contains(document.activeElement);
+  if (e.shiftKey && (document.activeElement === first || !inside)) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && (document.activeElement === last || !inside)) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
 document.addEventListener('keydown', (e) => {
   if (modal.hidden) return;
-  if (e.key === 'Escape' && !document.documentElement.classList.contains('is-project-page')) closeModal();
+  if (e.key === 'Tab' && !document.documentElement.classList.contains('is-project-page')) keepFocusInModal(e);
+  else if (e.key === 'Escape' && !document.documentElement.classList.contains('is-project-page')) closeModal();
   // Arrow keys move through the pictures and videos (not while typing or using a video's own controls)
   else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !(e.target.closest && e.target.closest('video, input, textarea'))) {
     if (projectMedia(modalItem).length > 1) showMedia(mediaIndex + (e.key === 'ArrowLeft' ? -1 : 1));

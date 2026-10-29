@@ -52,8 +52,14 @@ window.SITE_CONTENT = {
       "tip": "center",
       "glowSize": 320,
       "glowStrength": 18,
-      "glowColor": "accent",
-      "magnetic": false
+      "glowColor": "accent"
+    },
+    "effects": {
+      "bop": true,
+      "gloopy": false,
+      "squish": false,
+      "tilt": false,
+      "reveal": ""
     }
   },
   "categories": [

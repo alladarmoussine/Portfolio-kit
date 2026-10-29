@@ -134,7 +134,9 @@ again with a new GitHub token; nothing on the site is lost either way.
     "Projects shown here" (nothing ticked: all of them), with its own intro, highlights slider
     and filter buttons. While editing, every category it may show has a filter button (faded
     until it has a project): pick one and **+ Add project** adds a project of that kind. Each
-    project card's bar has a category picker.
+    project card's bar has a category picker. **+ Add category** at the end of the buttons adds
+    one and types its name; clicking a picked button again renames it, and its ✕ deletes it
+    (its projects move to the first category left).
 
   The entries in Testimonials, Logos, Numbers and FAQ fold to one line each; drag ⠿ to move
   them, ⧉ duplicates one. **Duplicate section** copies an added section right under it. Built-in
@@ -182,10 +184,12 @@ again with a new GitHub token; nothing on the site is lost either way.
   A tick turns off the full stop in the accent colour after section titles (`theme.titleDot`).
   **Corners** and **Mouse effect** are folded to one line saying how they're set; click to change.
   Their sliders restyle the page while dragged, like the colours.
-- **Pictures shrink on upload:** a photo bigger than 2400 px (or heavier than 500 KB) is scaled
-  down and saved again in its own format (JPEG, WebP or PNG) before it's uploaded, which also
-  drops the camera's hidden details (place, device). GIFs, SVGs and animated pictures stay as
-  they are, and so does a picture that wouldn't get clearly smaller.
+- **Pictures shrink on upload:** a picture bigger than 2400 px (or heavier than 150 KB) is scaled
+  down and saved again as WebP (pictures with see-through parts without losing detail) before
+  it's uploaded, and gets a `.webp` name; where the browser can't write WebP, in its own format.
+  This also drops the camera's hidden details (place, device). The share image, the browser-tab
+  icon and pointer pictures keep their format, and GIFs, SVGs, animated pictures and pictures that
+  wouldn't get clearly smaller stay as they are.
 - **Removing things:** the eye hides a whole section, and the ticks in a section's editor hide its
   parts. Nothing is deleted; show it again to bring it back. Menu links pointing to a hidden
   section are hidden too. Stored as `hidden` in `content/site.js`. While the panel is open,
@@ -293,8 +297,14 @@ photo at least 1920 px wide works best; its left side is darkened so the text st
 
 ### About
 - **Bio and skills:** `about.paragraphs` and `about.skills` in `content/site.js`.
-- **Photo:** `about.photo` is the image path. To adjust the crop, change `object-position`
-  on `.about-photo img` in `css/style.css`.
+- **Photo:** `about.photo` is the image path. How it sits is `about.photoLook`: `x` / `y` (the point
+  that stays in view, in %), `zoom` (1–3, around that point), `size` (`small`, `medium`, `large`:
+  30 / 36 / 42% of the width), `frame` (`edge` to the screen edge, `card`, `arch`), `strip` (`edge`,
+  `offset` block behind it, `none`), `accent` (its colour: `accent2`, `accent`, `text`, `lines`) and
+  `align` (the text beside it at its `top` or `center`). While
+  editing, the photo has a bar for these and **Crop** (drag the picture in its frame, scroll to
+  zoom), and its inner corner drags it between the three sizes. The same settings are under
+  Photo framing in the About editor.
 
 ### Showreel
 Put your video's YouTube ID in `reel.youtube`:
@@ -467,8 +477,18 @@ All effects are in `js/main.js`, and all respect the visitor's "reduce motion" s
   the theme's `cursors` folder). Browsers can't show these, so the panel reads the file when it's
   uploaded and saves its frames side by side in one PNG, with each frame's time and the pixel
   that points (`theme.cursor.frames`); the page plays the frames at their own speed and points
-  with that pixel ("Where the cursor file says"). **Magnetic buttons** can be added to any of them. Only on
+  with that pixel ("Where the cursor file says"). Only on
   mouse or trackpad devices; touch devices and visitors who reduce motion keep the normal pointer.
+- **Effects** (Theme tab, and a step of the setup; `theme.effects`): hover bop (buttons, cards and
+  contact icons lift under the mouse; on by default), gloopy buttons (drift toward the mouse), press
+  squish (buttons give when clicked), 3D card tilt (cards lean toward the mouse instead of the bop),
+  scroll reveal (None, Fade in or Slide up: items come in one after another) and a click animation
+  where visitors click (Burst, Ripple, Sparkle or your own animated GIF/WebP/PNG or see-through WebM,
+  kept as a strip of frames so it restarts on every click), one for computers and one for phones
+  and tablets (or the same). Visitors who
+  reduce motion get none; the hover ones need a mouse or trackpad. Scroll reveal only plays outside
+  editing, and so does the click animation: **Play effects** in the Effects box plays them once, and
+  Preview shows the page as visitors see it.
 - **Editing timeline and preview monitor:** the strip at the bottom of the top section
   (`#hero-timeline`). Its V1 track has one clip per uploaded video in Work (featured projects
   first; YouTube videos are left out). A playhead sweeps across in real time with a running

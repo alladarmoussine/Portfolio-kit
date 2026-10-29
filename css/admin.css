@@ -34,7 +34,7 @@
 
 .adm-top {
   position: sticky;
-  top: -20px;
+  top: 0; /* where it already is: it stays put from the first scroll */
   z-index: 2;
   margin: -20px -20px 0;
   padding: 16px 20px;
@@ -319,10 +319,10 @@
 .adm-editing [data-adm-row],
 .adm-editing [data-entry] { position: relative; }
 
-.adm-previewing :is(.adm-pencil, .adm-section-bar, .adm-insert, .adm-item-bar, .adm-add-tile, .adm-edge) { display: none !important; }
+.adm-previewing :is(.adm-pencil, .adm-section-bar, .adm-insert, .adm-item-bar, .adm-add-tile, .adm-add-filter, .adm-photo-tools, .adm-edge) { display: none !important; }
 
 /* Bars use the panel's look, whatever the text around them looks like */
-:is(.adm-section-bar, .adm-item-bar, .adm-insert, .adm-add-tile, .adm-typing-hint, .adm-preview-pill) {
+:is(.adm-section-bar, .adm-item-bar, .adm-insert, .adm-add-tile, .adm-add-filter, .adm-photo-bar, .adm-photo-size-label, .adm-typing-hint, .adm-preview-pill) {
   font-family: "Geologica", "Segoe UI", system-ui, sans-serif;
   font-size: 0.85rem;
   font-weight: 400;
@@ -416,9 +416,25 @@ html:not(.adm-editing) [data-placeholder].is-empty,
   stroke-linejoin: round;
 }
 
-/* Section bar: top left of the section (the docked panel covers the right), on hover or while open in the panel */
+/* The page's own colours, kept here before a section changes them (the dark top section on a light
+   theme, a section with light or dark text) */
+:root {
+  --adm-bar-bg: var(--bg-alt);
+  --adm-bar-text: var(--text);
+  --adm-bar-dim: var(--text-dim);
+  --adm-bar-border: var(--border);
+  --adm-bar-surface: var(--surface);
+}
+
+/* Section bar: top left of the section (the docked panel covers the right), on hover or while open in the panel.
+   It and its menus look the same in every section. */
 .adm-section-bar,
 .adm-item-bar {
+  --bg-alt: var(--adm-bar-bg);
+  --text: var(--adm-bar-text);
+  --text-dim: var(--adm-bar-dim);
+  --border: var(--adm-bar-border);
+  --surface: var(--adm-bar-surface);
   position: absolute;
   z-index: 30;
   display: flex;
@@ -466,6 +482,101 @@ html:not(.adm-editing) [data-placeholder].is-empty,
 
 /* While editing, every category has a filter button; one without projects yet is faded */
 .adm-editing .filter-btn.is-empty { opacity: 0.55; border-style: dashed; }
+.adm-add-filter {
+  padding: 9px 20px;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-dim);
+  font-weight: 600;
+  cursor: pointer;
+}
+.adm-add-filter:hover { color: var(--text); border-color: var(--accent-orange); }
+/* ✕ on a category's filter button, while it's hovered or picked */
+.adm-cat-del {
+  display: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin: -4px -10px -4px 8px;
+  border-radius: 50%;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  font-size: 0.65rem;
+  line-height: 1;
+  vertical-align: middle;
+  cursor: pointer;
+}
+.adm-cat-del:hover { background: #e5484d; color: #fff; }
+
+/* The About photo while editing: its bar, the corner that resizes it, and cropping. They sit on a layer
+   placed over the photo (js/admin.js, placePhotoTools), which lets the mouse through to the photo. */
+.adm-photo-tools { position: absolute; z-index: 31; pointer-events: none; }
+.adm-photo-tools > * { pointer-events: auto; }
+.adm-photo-bar {
+  --bg-alt: var(--adm-bar-bg);
+  --text: var(--adm-bar-text);
+  --text-dim: var(--adm-bar-dim);
+  --border: var(--adm-bar-border);
+  --surface: var(--adm-bar-surface);
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 31;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  max-width: calc(100% - 24px);
+  padding: 3px;
+  border: 1px solid var(--adm-bar-border);
+  border-radius: 14px;
+  background: var(--adm-bar-bg);
+  color: var(--adm-bar-text);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.adm-photo-bar .adm-bar-name { padding: 0 8px; font-weight: 400; color: var(--adm-bar-dim); }
+.adm-photo-bar input[type="range"] { width: 110px; accent-color: var(--accent-orange); }
+.adm-editing:not(.adm-previewing) .about:has(.about-photo:hover, .about-photo.adm-cropping, .adm-photo-tools > :hover) .adm-photo-bar { opacity: 1; }
+
+.adm-photo-size {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  z-index: 31;
+  width: 22px;
+  height: 22px;
+  border: 2px solid #fff;
+  border-top: 0;
+  border-right: 0;
+  border-radius: 0 0 0 6px;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.6));
+  cursor: nesw-resize;
+  opacity: 0;
+  touch-action: none;
+  transition: opacity 0.15s ease;
+}
+.adm-photo-size.is-right { left: auto; right: 10px; border-left: 0; border-right: 2px solid #fff; border-radius: 0 0 6px 0; cursor: nwse-resize; }
+.adm-editing:not(.adm-previewing) .about:has(.about-photo:hover, .adm-photo-tools > :hover) .adm-photo-size,
+.adm-photo-size.is-dragging { opacity: 1; }
+.adm-photo-size-label {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--adm-bar-bg);
+  color: var(--adm-bar-text);
+  white-space: nowrap;
+}
+.adm-photo-size.is-right .adm-photo-size-label { left: auto; right: 0; }
+.adm-photo-size-label:empty { display: none; }
+
+.about-photo.adm-cropping { outline: 2px dashed var(--accent); outline-offset: -2px; cursor: grab; touch-action: none; }
+.about-photo.adm-cropping.is-grabbing { cursor: grabbing; }
+.about-photo.adm-cropping img { user-select: none; -webkit-user-drag: none; }
+.adm-editing:not(.adm-previewing) .filter-btn:is(:hover, .is-active) > .adm-cat-del { display: inline-grid; }
 .work-card > .adm-item-bar,
 .quote-card > .adm-item-bar,
 .gallery-item > .adm-item-bar { top: 8px; left: 8px; bottom: auto; }
@@ -563,7 +674,7 @@ html:not(.adm-editing) [data-placeholder].is-empty,
 /* Which keys do what, by the text being typed (with formatting: the format bar, see below) */
 .adm-typing-hint {
   position: absolute;
-  z-index: 40;
+  z-index: 110; /* above a project's pop-up, whose words can be typed in too */
   padding: 3px 10px;
   border-radius: 999px;
   background: var(--bg-alt);

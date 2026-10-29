@@ -213,6 +213,16 @@
     c.theme = { preset: 'midnight', font: 'Geologica', headingFont: '', radius: 14, ...window.SiteTheme.fontStyle, ...(c.theme || {}) };
     c.theme.colors = { ...(c.theme.colors || {}) };
     c.theme.cursor = { ...(window.CURSOR_DEFAULTS || {}), ...(c.theme.cursor || {}) };
+    // Effects; Gloopy buttons were a pointer setting before (cursor.magnetic)
+    c.theme.effects = { ...(window.EFFECT_DEFAULTS || {}), gloopy: Boolean(c.theme.cursor.magnetic), ...(c.theme.effects || {}) };
+    delete c.theme.cursor.magnetic;
+    delete c.theme.cursor.hoverTilt;
+    ['scrambleMenu', 'scrambleButtons', 'scrambleTitles'].forEach((key) => delete c.theme.effects[key]);
+    const click = c.theme.effects.click || {};
+    c.theme.effects.click = {
+      computer: { ...(window.CLICK_DEFAULTS || {}), ...(click.computer || {}) },
+      phone: { ...(window.CLICK_DEFAULTS || {}), style: 'same', ...(click.phone || {}) },
+    };
     c.theme.saved = (Array.isArray(c.theme.saved) ? c.theme.saved : []).map((scheme) => ({ name: '', preset: 'midnight', ...scheme, colors: { ...((scheme && scheme.colors) || {}) } }));
     c.theme.titleDot = c.theme.titleDot !== false;
     // Dark and light for visitors: theme.other holds the second version's own changes
@@ -254,6 +264,7 @@
     c.resume = typeof c.resume === 'string' ? c.resume : '';
     c.about = c.about || {};
     c.about.photo = typeof c.about.photo === 'string' ? c.about.photo : '';
+    c.about.photoLook = { ...(window.PHOTO_LOOK || {}), ...(c.about.photoLook || {}) };
     c.about.paragraphs = c.about.paragraphs || [];
     c.about.skills = c.about.skills || [];
     c.work = (c.work || []).map(normalizeWork);
@@ -404,6 +415,7 @@
     const paths = new Set([content.site.favicon, content.site.shareImage, content.resume, content.about.photo, content.hero.background, content.hero.backgroundVideo, content.hero.portrait]);
     content.theme.customFonts.forEach((f) => paths.add(f.file));
     paths.add(content.theme.cursor.image);
+    Object.values((content.theme.effects && content.theme.effects.click) || {}).forEach((set) => paths.add(set && set.image));
     content.customSections.forEach((sec) => {
       [sec.image, sec.video, sec.thumb].forEach((path) => paths.add(path));
       (sec.images || []).forEach((img) => paths.add(img.src));
@@ -688,7 +700,7 @@
 
   const itemFields = (item) => [...(item.matches('[data-field]') ? [item] : []), ...item.querySelectorAll('[data-field]')];
   // Everything the panel adds to the page
-  const CHROME = '.adm-pencil, .adm-section-bar, .adm-insert, .adm-item-bar, .adm-add-tile, .adm-part-bar, .adm-part-tag';
+  const CHROME = '.adm-pencil, .adm-section-bar, .adm-insert, .adm-item-bar, .adm-add-tile, .adm-add-filter, .adm-cat-del, .adm-photo-tools, .adm-photo-bar, .adm-photo-size, .adm-part-bar, .adm-part-tag';
   const getPath = (path) => path.split('.').reduce((node, key) => (node == null ? node : node[key]), state.draft);
   const sectionOf = (node) => {
     const section = node.closest('[data-adm-row]');
@@ -747,6 +759,35 @@
       });
     markSelected();
     document.querySelectorAll('[data-entries]').forEach(decorateList);
+    decoratePhoto();
+    document.querySelectorAll('[data-adm-row] .filter-bar').forEach((bar) => {
+      // Each category's button: click to filter, again to rename; ✕ deletes it
+      bar.querySelectorAll('.filter-btn:not([data-filter="all"])').forEach((btn) => {
+        btn.title = 'Click to show only these; click again to rename';
+        btn.appendChild(h('span', {
+          class: 'adm-cat-del',
+          role: 'button',
+          title: 'Delete this category',
+          'aria-label': 'Delete this category',
+          text: '✕',
+          onclick: (e) => {
+            e.preventDefault();
+            e.stopPropagation(); // not a click on the filter button
+            deleteCategory(btn.dataset.filter);
+          },
+        }));
+      });
+      bar.appendChild(h('button', {
+        class: 'adm-add-filter',
+        type: 'button',
+        text: '+ Add category',
+        onclick: (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          addCategory(bar);
+        },
+      }));
+    });
   }
 
   function undecoratePage() {
@@ -765,6 +806,179 @@
   function markSelected() {
     document.querySelectorAll('[data-adm-row]').forEach((node) => node.classList.toggle('adm-selected', node.dataset.admRow === state.openRow));
     decorateBlocks();
+  }
+
+  // ---------- The About photo on the page ----------
+  // While editing: a bar on the photo (crop, frame, strip, how the text lines up, side) and a corner
+  // handle that resizes it in steps. Cropping: drag the picture inside its frame, scroll (or the slider)
+  // to zoom; it saves where the picture stays in view and how far it's zoomed (about.photoLook).
+  let cropping = false;
+  const PHOTO_SIZES = [['small', 30, 'Small'], ['medium', 36, 'Medium'], ['large', 42, 'Large']];
+  const PHOTO_FRAMES = [['edge', 'To the screen edge'], ['card', 'Card'], ['arch', 'Arch']];
+  const PHOTO_STRIPS = [['edge', 'Strip along its edge'], ['offset', 'Block behind it'], ['none', 'No accent']];
+  const PHOTO_ACCENTS = [['accent2', 'Second accent'], ['accent', 'Main accent'], ['text', 'Text colour'], ['lines', 'Lines colour']];
+  const PHOTO_ALIGNS = [['top', 'Text at the top'], ['center', 'Text in the middle']];
+  const roundTo = (value, step) => Math.round(value / step) * step;
+
+  function decoratePhoto() {
+    const frame = document.querySelector('#about .about-photo');
+    if (!frame || frame.classList.contains('is-removed') || !state.draft.about.photo) return;
+    const look = state.draft.about.photoLook;
+    const section = frame.closest('.about');
+    const set = state.draft.sections.about || {};
+    const onLeft = set.layout === 'photo-left';
+    const beside = set.layout !== 'photo-above';
+    const keep = (e) => e.stopPropagation();
+    const pick = (key, options, label) => h('select', {
+      class: 'adm-bar-select',
+      title: label,
+      'aria-label': label,
+      onclick: keep,
+      onkeydown: keep,
+      onchange: (e) => { look[key] = e.target.value; rerenderTab(); },
+    }, options.map(([value, text]) => h('option', { value, text, selected: look[key] === value })));
+    frame.classList.toggle('adm-cropping', cropping);
+    setUpPhotoDrag(frame);
+    const bar = cropping
+      ? h('div', { class: 'adm-photo-bar' },
+        h('span', { class: 'adm-bar-name', text: 'Drag to move, scroll to zoom' }),
+        h('input', {
+          type: 'range', min: 1, max: 3, step: 0.05, value: look.zoom, 'aria-label': 'Zoom', title: 'Zoom',
+          onclick: keep,
+          onpointerdown: keep,
+          oninput: (e) => { look.zoom = Number(e.target.value); window.SitePhoto.apply(section, frame, look); scheduleHistory(); },
+          onchange: () => rerenderTab(),
+        }),
+        barBtn('Reset', 'Back to the middle, not zoomed', () => { Object.assign(look, { x: 50, y: 40, zoom: 1 }); rerenderTab(); }),
+        barBtn('Done', 'Done moving the picture', () => { cropping = false; renderNow(); }))
+      : h('div', { class: 'adm-photo-bar' },
+        barBtn('Crop', 'Move and zoom the picture inside its frame', () => { cropping = true; renderNow(); }),
+        pick('frame', PHOTO_FRAMES, 'Frame'),
+        pick('strip', PHOTO_STRIPS, 'Accent'),
+        look.strip !== 'none' ? pick('accent', PHOTO_ACCENTS, 'Accent colour') : null,
+        beside ? pick('align', PHOTO_ALIGNS, 'How the text lines up with it') : null,
+        beside ? barBtn('\u21C4', onLeft ? 'Put the photo on the right' : 'Put the photo on the left', () => {
+          state.draft.sections.about = { ...set, layout: onLeft ? 'photo-right' : 'photo-left' };
+          rerenderTab();
+        }) : null);
+    // On a layer over the photo, not inside it: the frame clips to its shape (an arch's round top)
+    const tools = h('div', { class: 'adm-photo-tools' }, bar,
+      // The corner on the text's side: drag it and the photo snaps to small, medium or large
+      beside && !cropping ? photoSizeHandle(frame, section, look, onLeft) : null);
+    section.appendChild(tools);
+    placePhotoTools(frame);
+  }
+
+  // The layer follows the photo: its size, side, the text lined up with it, and its slide-in
+  function placePhotoTools(frame) {
+    const tools = frame.parentElement.querySelector(':scope > .adm-photo-tools');
+    if (!tools) return;
+    const box = frame.getBoundingClientRect();
+    const around = frame.parentElement.getBoundingClientRect();
+    Object.assign(tools.style, {
+      left: `${box.left - around.left}px`,
+      top: `${box.top - around.top}px`,
+      width: `${box.width}px`,
+      height: `${box.height}px`,
+    });
+  }
+
+  function photoSizeHandle(frame, section, look, onLeft) {
+    const label = h('span', { class: 'adm-photo-size-label', text: '' });
+    const handle = h('span', {
+      class: `adm-photo-size${onLeft ? ' is-right' : ''}`,
+      title: 'Drag to make the photo smaller or bigger',
+      'aria-hidden': 'true',
+    }, label);
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      handle.setPointerCapture(e.pointerId);
+      const box = frame.getBoundingClientRect();
+      const edge = onLeft ? box.left : box.right; // the side that stays put
+      handle.classList.add('is-dragging');
+      const move = (ev) => {
+        const wide = Math.abs(edge - ev.clientX) / window.innerWidth * 100;
+        const [name, percent, title] = PHOTO_SIZES.reduce((best, size) => (Math.abs(size[1] - wide) < Math.abs(best[1] - wide) ? size : best));
+        look.size = name;
+        section.dataset.photoSize = name;
+        label.textContent = `${title} \u00B7 ${percent}%`;
+        placePhotoTools(frame);
+      };
+      const up = () => {
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', up);
+        handle.removeEventListener('pointercancel', up);
+        rerenderTab();
+      };
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', up);
+      handle.addEventListener('pointercancel', up);
+      move(e);
+    });
+    return handle;
+  }
+
+  // Dragging and scrolling on the picture while cropping (set up once: the photo stays on the page)
+  function setUpPhotoDrag(frame) {
+    if (frame.dataset.admDrag) return;
+    frame.dataset.admDrag = '1';
+    const place = () => placePhotoTools(frame);
+    new ResizeObserver(place).observe(frame);
+    frame.addEventListener('transitionend', place);
+    window.addEventListener('resize', place);
+    const img = frame.querySelector('img');
+    const section = frame.closest('.about');
+    let saveTimer = 0;
+    // How far the picture can move inside the frame, in px, for each % of its position
+    const room = (look, box) => {
+      const ratio = (img.naturalWidth || 1) / (img.naturalHeight || 1);
+      const coverW = Math.max(box.width, box.height * ratio);
+      const coverH = Math.max(box.height, box.width / ratio);
+      return {
+        x: ((coverW - box.width) * look.zoom + (look.zoom - 1) * box.width) / 100,
+        y: ((coverH - box.height) * look.zoom + (look.zoom - 1) * box.height) / 100,
+      };
+    };
+    frame.addEventListener('pointerdown', (e) => {
+      if (!cropping || e.target.closest(CHROME) || e.button > 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      frame.setPointerCapture(e.pointerId);
+      const look = state.draft.about.photoLook;
+      const start = { cx: e.clientX, cy: e.clientY, x: look.x, y: look.y };
+      const per = room(look, frame.getBoundingClientRect());
+      frame.classList.add('is-grabbing');
+      const move = (ev) => {
+        // The picture follows the pointer: dragging it right shows more of its left side
+        if (per.x > 0) look.x = Math.min(Math.max(start.x - (ev.clientX - start.cx) / per.x, 0), 100);
+        if (per.y > 0) look.y = Math.min(Math.max(start.y - (ev.clientY - start.cy) / per.y, 0), 100);
+        window.SitePhoto.apply(section, frame, look);
+      };
+      const up = () => {
+        frame.removeEventListener('pointermove', move);
+        frame.removeEventListener('pointerup', up);
+        frame.removeEventListener('pointercancel', up);
+        frame.classList.remove('is-grabbing');
+        look.x = roundTo(look.x, 0.1);
+        look.y = roundTo(look.y, 0.1);
+        rerenderTab();
+      };
+      frame.addEventListener('pointermove', move);
+      frame.addEventListener('pointerup', up);
+      frame.addEventListener('pointercancel', up);
+    });
+    frame.addEventListener('wheel', (e) => {
+      if (!cropping) return;
+      e.preventDefault();
+      const look = state.draft.about.photoLook;
+      look.zoom = roundTo(Math.min(Math.max(look.zoom * (1 - e.deltaY * 0.0015), 1), 3), 0.01);
+      window.SitePhoto.apply(section, frame, look);
+      const slider = frame.querySelector('.adm-photo-bar input[type="range"]');
+      if (slider) slider.value = look.zoom;
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => rerenderTab(), 400);
+    }, { passive: false });
   }
 
   // ---------- Layouts and parts of a section ----------
@@ -1200,11 +1414,15 @@
     const translations = arr.some((v) => typeof v === 'string') && owner && owner.i18n
       ? Object.values(owner.i18n).map((tr) => tr[key]).filter(Array.isArray) : [];
     translations.forEach((tr) => { while (tr.length < arr.length) tr.push(''); });
+    // Questions that were open stay open where they move to
+    const shown = (i) => document.querySelector(`details[data-entry="${path}.${i}"]`);
+    const wasOpen = arr.filter((item, i) => shown(i) && shown(i).open);
     change(arr, true);
     translations.forEach((tr) => change(tr, false));
     if (open) state.openItem = work.includes(open) ? work.indexOf(open) : null;
     rerenderTab();
     renderNow();
+    arr.forEach((item, i) => { if (shown(i)) shown(i).open = wasOpen.includes(item); });
   }
 
   function addEntry(path, what, list) {
@@ -1241,8 +1459,67 @@
     renderNow();
     // Straight into typing its first text, all of it selected
     const node = document.querySelector(`[data-entry="${path}.${arr.length - 1}"]`);
+    if (node && node.tagName === 'DETAILS') node.open = true; // a new question shows its answer to type in
     const first = node && (node.matches('[data-field]') ? node : node.querySelector('[data-field]'));
     if (first) startEditing(first, { selectAll: true });
+  }
+
+  // A new category from a grid's filter buttons: picked (so + Add project goes into it), its name typed.
+  // A grid that only shows some categories shows this one too.
+  function addCategory(bar) {
+    const c = state.draft;
+    const id = `cat-${Date.now().toString(36)}`;
+    const sectionId = sectionOf(bar);
+    c.categories.push({ id, label: 'New category', icon: 'star', color: '' });
+    const set = c.sections[sectionId];
+    if (set && Array.isArray(set.categories) && set.categories.length) set.categories.push(id);
+    rerenderTab();
+    renderNow();
+    const btn = document.querySelector(`[data-adm-row="${sectionId}"] .filter-btn[data-filter="${id}"]`);
+    if (!btn) return;
+    btn.click();
+    typeCategoryName(btn);
+  }
+
+  // A category's name typed on its filter button, in a look-alike of it (text in a button can't be typed
+  // in everywhere); the redraw after typing brings the button back
+  function typeCategoryName(btn) {
+    const c = state.draft;
+    const i = c.categories.findIndex((cat) => cat.id === btn.dataset.filter);
+    if (i < 0) return;
+    const label = h('span', { text: typeLabelOf(c.categories[i]) });
+    label.dataset.field = `categories.${i}.label`;
+    const pill = h('span', { class: btn.className }, label);
+    pill.dataset.filter = btn.dataset.filter;
+    btn.replaceWith(pill);
+    startEditing(label, { selectAll: true });
+  }
+
+  // The name shown on its button (in the language being edited)
+  const typeLabelOf = (cat) => {
+    const tr = cat.i18n && cat.i18n[lang()];
+    return (translating('label') && tr && tr.label) || cat.label || cat.id;
+  };
+
+  // Its projects move to the first category left; a site keeps at least one
+  function deleteCategory(id) {
+    const c = state.draft;
+    const cat = c.categories.find((x) => x.id === id);
+    if (!cat) return;
+    const rest = c.categories.filter((x) => x.id !== id);
+    if (!rest.length) {
+      alert('A site needs at least one category. Add another one first, or rename this one.');
+      return;
+    }
+    const count = c.work.filter((item) => item.type === id).length;
+    const into = rest[0].label || rest[0].id;
+    const name = cat.label || cat.id;
+    if (!confirm(count ? `Delete the category “${name}”? Its ${count} project${count > 1 ? 's' : ''} move${count > 1 ? '' : 's'} to “${into}”.` : `Delete the category “${name}”?`)) return;
+    c.work.forEach((item) => { if (item.type === id) item.type = rest[0].id; });
+    Object.values(c.sections).forEach((set) => { if (set && Array.isArray(set.categories)) set.categories = set.categories.filter((x) => x !== id); });
+    c.categories = rest;
+    rerenderTab();
+    renderNow();
   }
 
   // ---------- Typing on the page ----------
@@ -1724,7 +2001,17 @@
   // Clicking text starts typing in it; clicking elsewhere in a section opens that section in the panel
   document.addEventListener('click', (e) => {
     if (!editingPage() || !e.target.closest) return;
-    if (e.target.closest(`.adm-root, .adm-edge, .adm-phone, .modal-overlay, .adm-typing-hint, ${CHROME}`)) return;
+    // In a project's pop-up, only its words are typed in (the rest works as for visitors)
+    const inPopup = e.target.closest('.modal-overlay');
+    if (inPopup && !e.target.closest('[data-field]')) return;
+    if (e.target.closest(`.adm-root, .adm-edge, .adm-phone, .adm-typing-hint, ${CHROME}`)) return;
+    const picked = e.target.closest('.filter-btn.is-active:not([data-filter="all"])');
+    if (picked && picked.tagName === 'BUTTON') {
+      e.preventDefault();
+      e.stopPropagation();
+      typeCategoryName(picked);
+      return;
+    }
     const part = e.target.closest('[data-blocks] > [data-block]');
     selectedPart = part ? { id: sectionOf(part), name: part.dataset.block } : null;
     const node = e.target.closest('[data-field]');
@@ -1844,7 +2131,9 @@
 
   // ---------- Files ----------
   // Returns the repo path the file will be saved to, or null if it was refused
-  function stageFile(file, path) {
+  // keepFormat: the picture stays in its own format (the share image, icon and pointer, which some sites
+  // and browsers only take as PNG or JPEG)
+  function stageFile(file, path, { keepFormat = false } = {}) {
     if (file.size > MAX_BYTES) {
       alert(`${file.name} is ${(file.size / MB).toFixed(0)} MB. The limit here is ${MAX_BYTES / MB} MB.\n\nUpload big videos to YouTube and paste the link instead, or compress the file first.`);
       return null;
@@ -1856,14 +2145,24 @@
     if (old) URL.revokeObjectURL(old);
     state.pending.set(path, file);
     window.SITE_ASSET_OVERRIDES[path] = URL.createObjectURL(file);
-    // A big photo is swapped for a smaller copy once it's ready (saving waits for it)
+    // A big photo is swapped for a smaller copy once it's ready (saving waits for it). A copy made as WebP
+    // gets a .webp name, and whatever uses the picture is pointed at it.
     if (file.type in SHRINK_QUALITY) {
-      const job = shrinkPicture(file).catch(() => null).then((smaller) => {
+      const job = shrinkPicture(file, keepFormat).catch(() => null).then((smaller) => {
         if (shrinking.get(path) !== job) return;
         shrinking.delete(path);
         if (!smaller || state.pending.get(path) !== file) return;
-        state.pending.set(path, smaller);
-        window.SITE_ASSET_OVERRIDES[path] = URL.createObjectURL(smaller);
+        const next = smaller.type === file.type ? path : path.replace(/\.[a-z0-9]+$/i, '') + '.webp';
+        const url = URL.createObjectURL(smaller);
+        if (next !== path) {
+          state.pending.delete(path);
+          renamed.set(path, next);
+          renamePaths(state.draft);
+          window.SITE_ASSET_OVERRIDES[next] = url;
+        }
+        state.pending.set(next, smaller);
+        // The old name keeps showing it too (an undo can bring it back; saving renames it again)
+        window.SITE_ASSET_OVERRIDES[path] = url;
         preview();
       });
       shrinking.set(path, job);
@@ -1872,13 +2171,33 @@
   }
 
   // ---------- Pictures shrink on upload ----------
-  // A photo wider or taller than 2400 px, or heavier than 500 KB, is scaled down and saved again in its own
-  // format (so its name stays the same) before it's uploaded. That keeps the site quick and drops the
-  // camera's hidden details (place, device). GIF, SVG and animated pictures stay as they are, and so does
-  // a picture the copy wouldn't make clearly smaller.
+  // A picture wider or taller than 2400 px, or heavier than 150 KB, is scaled down and saved again as WebP
+  // (much smaller for the same look; with see-through parts, without losing any detail) before it's
+  // uploaded, or in its own format where the browser can't write WebP or keepFormat asks. That keeps the
+  // site quick and drops the camera's hidden details (place, device). GIF, SVG and animated pictures stay
+  // as they are, and so does a picture the copy wouldn't make clearly smaller.
   const SHRINK_EDGE = 2400;
   const SHRINK_QUALITY = { 'image/jpeg': 0.85, 'image/webp': 0.85, 'image/png': undefined };
   const shrinking = new Map(); // path -> the job making its smaller copy
+  const renamed = new Map(); // a picture's first name -> its .webp name
+
+  // Points everything that uses a renamed picture at its new name
+  function renamePaths(node) {
+    if (!node || typeof node !== 'object') return;
+    Object.entries(node).forEach(([key, value]) => {
+      if (typeof value === 'string' && renamed.has(value)) node[key] = renamed.get(value);
+      else renamePaths(value);
+    });
+  }
+
+  // Any pixel not fully solid (logos and cut-outs keep their edges crisp)
+  function hasSeeThrough(ctx, canvas) {
+    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    for (let i = 3; i < data.length; i += 4) if (data[i] < 255) return true;
+    return false;
+  }
+
+  const canvasBlob = (canvas, type, quality) => new Promise((resolve) => canvas.toBlob(resolve, type, quality));
 
   // Animated PNG ("acTL") and WebP ("ANIM") say so near the start of the file
   async function isAnimated(file) {
@@ -1892,11 +2211,11 @@
     return false;
   }
 
-  async function shrinkPicture(file) {
+  async function shrinkPicture(file, keepFormat) {
     if (await isAnimated(file)) return null;
     const bitmap = await createImageBitmap(file);
     const scale = Math.min(1, SHRINK_EDGE / Math.max(bitmap.width, bitmap.height));
-    if (scale === 1 && file.size <= 500 * 1024) {
+    if (scale === 1 && file.size <= 150 * 1024) {
       bitmap.close();
       return null;
     }
@@ -1905,10 +2224,19 @@
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     bitmap.close();
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, file.type, SHRINK_QUALITY[file.type]));
-    // Not every browser can write every format (it falls back to PNG): keep the original then
-    if (!blob || blob.type !== file.type || blob.size > file.size * 0.9) return null;
-    return new File([blob], file.name, { type: file.type, lastModified: Date.now() });
+    // Not every browser can write every format (it falls back to PNG): then its own format, else the original
+    let blob = null;
+    if (!keepFormat) {
+      blob = await canvasBlob(canvas, 'image/webp', file.type === 'image/png' && hasSeeThrough(ctx, canvas) ? 1 : 0.85);
+      if (blob && blob.type !== 'image/webp') blob = null;
+    }
+    if (!blob) {
+      blob = await canvasBlob(canvas, file.type, SHRINK_QUALITY[file.type]);
+      if (blob && blob.type !== file.type) blob = null;
+    }
+    if (!blob || blob.size > file.size * 0.9) return null;
+    const name = blob.type === file.type ? file.name : `${file.name.replace(/\.[a-z0-9]+$/i, '')}.webp`;
+    return new File([blob], name, { type: blob.type, lastModified: Date.now() });
   }
 
   function clearPending() {
@@ -1916,6 +2244,7 @@
     window.SITE_ASSET_OVERRIDES = {};
     state.pending.clear();
     shrinking.clear();
+    renamed.clear();
   }
 
   // ---------- Panel shell ----------
@@ -2681,8 +3010,13 @@
           ], current, (value) => { setVisitors(theme, value); redraw(); }),
           theme.switchable ? h('p', { class: 'adm-hint', text: 'Use the \u263E/\u2600 button in the menu to see the other version on the page.' }) : null,
           coloursBox(theme, true),
-          fontsBox(theme));
+          fontsBox(theme, true));
       },
+    },
+    {
+      title: 'How should it move?',
+      help: 'Little effects when visitors hover, click and scroll. Tick what you like; they\u2019re all in the Theme tab under Effects later.',
+      body: () => h('div', { class: 'adm-form' }, ...effectsFields(state.draft.theme.effects)),
     },
     {
       title: 'The top of your page',
@@ -3561,12 +3895,12 @@
       h('div', { class: 'adm-section-head' },
         h('p', { class: 'adm-help', text: 'Who the site belongs to and where it links to. Your name shows in the top section, the logo, the footer and the browser tab.' }),
         h('div', { class: 'adm-inline' },
-          h('button', { class: 'adm-btn', type: 'button', text: 'Run setup again', title: 'The first-time steps: name, look, top section, work, contact, languages', onclick: () => showWizard(0) }),
+          h('button', { class: 'adm-btn', type: 'button', text: 'Run setup again', title: 'The first-time steps: name, look, effects, top section, work, contact, languages', onclick: () => showWizard(0) }),
           h('button', { class: 'adm-btn', type: 'button', text: 'Find unused files', title: 'Files in assets/ that nothing on the site uses', onclick: () => showCleanup() }))),
       h('div', { class: 'adm-form adm-group-box', 'data-adm-section': 'site' },
         h('h3', { class: 'adm-group', text: 'You' }),
         h('div', { class: 'adm-row2' },
-          field('Full name', formattable(text(site, 'name', { placeholder: 'e.g. Sam Janssens' })), 'Formatting shows in the big heading only; the logo, footer and browser tab use the words.'),
+          field('Full name', text(site, 'name', { placeholder: 'e.g. Sam Janssens' })),
           field('Short name', text(site, 'shortName', { placeholder: name.split(/\s+/)[0] }), 'Used in the contact form note. Empty uses your first name.')),
         h('p', { class: 'adm-hint', text: 'The logo shows the first word of your name in the text colour and the rest in the accent colour.' })),
       h('div', { class: 'adm-form adm-group-box' },
@@ -3600,7 +3934,7 @@
           ? [currentFile(site.favicon), h('button', { class: 'adm-link', type: 'button', text: 'Use letters instead', onclick: () => { site.favicon = ''; rerenderTab(); } })]
           : text(site, 'initials', { placeholder: name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase(), maxLength: 3, onchange: () => rerenderTab() })),
       filePicker('image/png,image/svg+xml,image/x-icon,image/webp,.ico,.png,.svg,.webp', (file) => {
-        const path = stageFile(file, `assets/favicon-${Date.now().toString(36)}${extension(file) || '.png'}`);
+        const path = stageFile(file, `assets/favicon-${Date.now().toString(36)}${extension(file) || '.png'}`, { keepFormat: true });
         if (path) { site.favicon = path; rerenderTab(); }
       }),
       h('span', { class: 'adm-hint', text: site.favicon
@@ -3634,7 +3968,7 @@
           site.shareImage ? currentFile(site.shareImage) : null,
           site.shareImage ? h('button', { class: 'adm-link', type: 'button', text: 'Remove', onclick: () => { site.shareImage = ''; rerenderTab(); } }) : null),
         filePicker('image/jpeg,image/png,image/webp', (file) => {
-          const path = stageFile(file, `assets/share-${Date.now().toString(36)}${extension(file) || '.jpg'}`);
+          const path = stageFile(file, `assets/share-${Date.now().toString(36)}${extension(file) || '.jpg'}`, { keepFormat: true });
           if (path) { site.shareImage = path; rerenderTab(); }
         }),
         h('span', { class: 'adm-hint', text: 'Shown when someone shares your link (WhatsApp, LinkedIn, Facebook\u2026). Use a landscape picture of 1200 \u00D7 630 pixels, with the important part in the middle.' })),
@@ -3944,13 +4278,11 @@
       },
     });
     const rows = theme.switchable ? ['dark', 'light'].map((mode) => colourRow(theme, mode, true)) : [colourRow(theme, main, false)];
-    return h('div', { class: 'adm-form adm-group-box', 'data-adm-section': 'colours' },
-      h('div', { class: 'adm-colours-head' },
-        h('h3', { class: 'adm-group', text: 'Colours' }),
-        hasOwnColours(theme) ? iconBtn('\u21BA', 'Back to the scheme\u2019s own colours', () => {
-          useScheme(theme, { preset: theme.preset, colors: {}, other: {} });
-          redraw();
-        }) : null),
+    const reset = hasOwnColours(theme) ? iconBtn('\u21BA', 'Back to the scheme\u2019s own colours', () => {
+      useScheme(theme, { preset: theme.preset, colors: {}, other: {} });
+      redraw();
+    }) : null;
+    const body = [
       setup ? null : h('div', { class: 'adm-visitors' },
         h('span', { class: 'adm-label', text: 'Visitors see' }),
         h('div', { class: 'adm-segs', title: 'Both: each visitor first sees the version their device prefers, and a \u263E/\u2600 button in the menu switches. The top section stays dark in both, so its text reads on photos and video.' },
@@ -3959,7 +4291,18 @@
       !setup && theme.switchable && backgroundsNote && backgroundsNote.length ? backgroundsTip(theme) : null,
       schemeChips(theme, (scheme) => { useScheme(theme, scheme); redraw(); }, true),
       ...rows,
-      theme.switchable ? h('p', { class: 'adm-hint', text: 'A scheme sets both versions; the second is made to match. Change a colour in either row, and the page shows that version while you do.' }) : null);
+      theme.switchable ? h('p', { class: 'adm-hint', text: 'A scheme sets both versions; the second is made to match. Change a colour in either row, and the page shows that version while you do.' }) : null,
+    ];
+    // In the setup it's always open; in the Theme tab it folds, saying which scheme and versions
+    if (setup) {
+      return h('div', { class: 'adm-form adm-group-box', 'data-adm-section': 'colours' },
+        h('div', { class: 'adm-colours-head' }, h('h3', { class: 'adm-group', text: 'Colours' }), reset), ...body);
+    }
+    const scheme = ((T.presets[theme.preset] || {}).name || 'Your colours').replace(/\s*\(.*\)$/, '');
+    const seen = { both: 'both versions', dark: 'dark', light: 'light' }[visitors];
+    return fold('colours', 'Colours', `${scheme}${hasOwnColours(theme) ? ', changed' : ''} \u00B7 ${seen}`,
+      reset ? h('div', { class: 'adm-inline' }, reset, h('span', { class: 'adm-hint', text: 'Back to the scheme\u2019s own colours' })) : null,
+      ...body);
   }
 
   // How the ☾/☀ button in the menu looks: an icon, the icon with a word, or a sliding switch
@@ -4199,9 +4542,9 @@
       theme.headingItalic && !ownItalic ? h('p', { class: 'adm-hint', text: 'This font has no italic letters of its own, so the browser slants the normal ones.' }) : null);
   }
 
-  function fontsBox(theme) {
-    return h('div', { class: 'adm-form adm-group-box' },
-      h('h3', { class: 'adm-group', text: 'Fonts' }),
+  // In the setup it's always open; in the Theme tab it folds, saying which fonts
+  function fontsBox(theme, setup) {
+    const body = [
       fontPicker(theme, 'font', 'Text'),
       textStyleBox(theme),
       fontPicker(theme, 'headingFont', 'Headings', 'Same as the text'),
@@ -4209,7 +4552,11 @@
       h('p', { class: 'adm-hint', text: 'Headings are your name, the section titles, card titles and the logo. Bold words: the ones you make bold in a heading. Letter spacing 0 is the font’s own.' }),
       check(theme, 'titleDot', 'A full stop in the accent colour after section titles'),
       ownFontsOpen || theme.customFonts.length ? customFontsBox(theme)
-        : h('div', null, h('button', { class: 'adm-btn', type: 'button', text: '+ Your own font', onclick: () => { ownFontsOpen = true; redraw(); } })));
+        : h('div', null, h('button', { class: 'adm-btn', type: 'button', text: '+ Your own font', onclick: () => { ownFontsOpen = true; redraw(); } })),
+    ];
+    if (setup) return h('div', { class: 'adm-form adm-group-box' }, h('h3', { class: 'adm-group', text: 'Fonts' }), ...body);
+    const heading = theme.headingFont && theme.headingFont !== theme.font ? theme.headingFont : '';
+    return fold('fonts', 'Fonts', heading ? `${theme.font} \u00B7 ${heading}` : theme.font, ...body);
   }
 
   function themeTab() {
@@ -4220,7 +4567,163 @@
       fontsBox(theme),
       fold('corners', 'Corners', `${theme.radius} px`,
         slider(theme, 'radius', 'Corner roundness', 0, 28, 2, ' px', 'Cards, the showreel frame and pop-ups.', restyle(theme))),
-      cursorBox(theme));
+      cursorBox(theme),
+      effectsBox(theme));
+  }
+
+  // Little effects when visitors hover, click and scroll (theme.effects; see applyEffects in js/main.js).
+  // The same list is a step of the setup.
+  const EFFECT_CHECKS = [
+    ['bop', 'Hover bop', 'Buttons, project cards and contact icons lift a little under the mouse.'],
+    ['gloopy', 'Gloopy buttons', 'Buttons drift a little toward the mouse.'],
+    ['squish', 'Press squish', 'Buttons give a little when clicked, then spring back.'],
+    ['tilt', '3D card tilt', 'Project cards lean toward the mouse, in place of their bop.'],
+  ];
+
+  function effectsFields(fx) {
+    return [
+      EFFECT_CHECKS.map(([key, name, what]) => check(fx, key, `${name}: ${what}`)),
+      choice(fx, 'reveal', 'Scroll reveal', [['', 'None'], ['fade', 'Fade in'], ['slide', 'Slide up']],
+        'Cards, quotes, paragraphs and the other parts of each section come in one after another as they scroll into view.'),
+      h('div', { class: 'adm-form adm-group-box' },
+        h('h3', { class: 'adm-group', text: 'Click animation' }),
+        h('p', { class: 'adm-hint', text: 'Plays where visitors click, then goes. Phones and tablets can have their own, for taps.' }),
+        clickRow(fx.click.computer, 'On computers (mouse or trackpad)', false),
+        clickRow(fx.click.phone, 'On phones and tablets (taps)', true)),
+      h('div', { class: 'adm-inline' },
+        h('button', {
+          class: 'adm-btn',
+          type: 'button',
+          text: '\u25b6 Play effects',
+          title: 'Plays the click animations in the middle of the screen, and the scroll reveal on what\u2019s on the page right now',
+          // Text being typed is finished and the page redrawn first, so no redraw cuts the effects short
+          onclick: () => { stopEditing(); renderNow(); window.SiteEffects.play(); },
+        })),
+      h('p', { class: 'adm-hint', text: 'The hover effects are only on computers with a mouse or trackpad. Visitors who prefer less motion get none of them. The click animation and scroll reveal don\u2019t play by themselves while you edit: Play effects shows them, and Preview (the eye) shows the page as visitors see it.' }),
+    ];
+  }
+
+  function effectsBox(theme) {
+    const fx = theme.effects;
+    const clicks = fx.click.computer.style || !['', 'same'].includes(fx.click.phone.style) ? 1 : 0;
+    const on = EFFECT_CHECKS.filter(([key]) => fx[key]).length + (fx.reveal ? 1 : 0) + clicks;
+    return fold('effects', 'Effects', on ? `${on} on` : 'Off', ...effectsFields(fx));
+  }
+
+  // ---------- Click animation (Effects) ----------
+  // theme.effects.click.computer / .phone (see CLICK_DEFAULTS in js/main.js). Your own animation is kept as
+  // a strip of frames side by side in one picture, so it starts from its first frame on every click.
+  const CLICK_STYLES = [['', 'None'], ['burst', 'Burst'], ['ripple', 'Ripple'], ['sparkle', 'Sparkle'], ['image', 'Your own animation']];
+  const CLICK_EDGE = 240; // px: the biggest a frame is kept
+  const CLICK_FPS = 30; // frames taken from each second of a video
+  const CLICK_MAX_FRAMES = 90; // 3 seconds of video
+
+  function clickRow(set, label, phone) {
+    const styles = phone ? [['same', 'Same as on computers'], ...CLICK_STYLES] : CLICK_STYLES;
+    const own = set.style === 'image';
+    const shows = Boolean(set.style) && set.style !== 'same';
+    return h('div', { class: 'adm-field' },
+      h('span', { class: 'adm-label', text: label }),
+      h('select', {
+        'aria-label': label,
+        onchange: (e) => { set.style = e.target.value; redraw(); },
+      }, styles.map(([value, text]) => h('option', { value, text, selected: set.style === value }))),
+      shows && !own ? choice(set, 'color', 'Colour', [['accent', 'Main accent'], ['accent2', 'Second accent'], ['white', 'White'], ['invert', 'Inverted (shows on anything)']]) : null,
+      shows ? slider(set, 'size', 'Size', 16, 240, 4, ' px') : null,
+      own ? [
+        h('div', { class: 'adm-inline' },
+          cursorPreview(set),
+          set.image
+            ? h('button', { class: 'adm-link', type: 'button', text: 'Remove', onclick: () => { set.image = ''; delete set.frames; redraw(); } })
+            : h('span', { class: 'adm-hint', text: 'None yet: nothing plays until there is one.' })),
+        filePicker('image/gif,image/webp,image/png,image/apng,video/webm', (file) => pickClick(set, file)),
+        h('span', { class: 'adm-hint', text: 'An animated GIF, WebP or PNG, or a WebM video with a see-through background (its first 3 seconds). It starts from the beginning on every click.' }),
+        choice(set, 'tip', 'Where it sits', [['center', 'Centred on the click'], ['top-left', 'Its top-left corner on the click']]),
+      ] : null);
+  }
+
+  // A frame, drawn at most CLICK_EDGE across
+  function clickFrame(source, width, height, delay) {
+    const scale = Math.min(1, CLICK_EDGE / Math.max(width, height, 1));
+    const canvas = h('canvas', { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) });
+    canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height);
+    return { image: canvas, width: canvas.width, height: canvas.height, delay };
+  }
+
+  // An animated GIF, WebP or PNG as frames (where the browser can read them; else as one picture)
+  async function readAnimation(file) {
+    if (file.type.startsWith('video/')) return readVideoFrames(file);
+    if ('ImageDecoder' in window && await window.ImageDecoder.isTypeSupported(file.type)) {
+      const decoder = new window.ImageDecoder({ data: await file.arrayBuffer(), type: file.type });
+      await decoder.tracks.ready; // which frames it has, then all of them read in
+      await decoder.completed;
+      const count = Math.min(decoder.tracks.selectedTrack.frameCount, CLICK_MAX_FRAMES);
+      const frames = [];
+      for (let i = 0; i < count; i++) {
+        const { image } = await decoder.decode({ frameIndex: i });
+        // duration is in microseconds
+        frames.push(clickFrame(image, image.displayWidth, image.displayHeight, image.duration ? image.duration / 1000 : 40));
+        image.close();
+      }
+      decoder.close();
+      return frames;
+    }
+    const bitmap = await createImageBitmap(file);
+    const frames = [clickFrame(bitmap, bitmap.width, bitmap.height, 600)];
+    bitmap.close();
+    return frames;
+  }
+
+  // A WebM video's frames, stepped through one by one (its see-through parts stay see-through)
+  async function readVideoFrames(file) {
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'auto';
+    const url = URL.createObjectURL(file);
+    try {
+      video.src = url;
+      await new Promise((resolve, reject) => {
+        video.onloadeddata = resolve;
+        video.onerror = () => reject(new Error('this browser can\u2019t play it'));
+      });
+      // Some files don't say how long they are: then up to the most frames kept
+      const length = Number.isFinite(video.duration) ? video.duration : CLICK_MAX_FRAMES / CLICK_FPS;
+      const count = Math.min(Math.max(1, Math.round(length * CLICK_FPS)), CLICK_MAX_FRAMES);
+      const frames = [];
+      for (let i = 0; i < count; i++) {
+        if (i > 0) {
+          video.currentTime = Math.min(i / CLICK_FPS, length - 0.001);
+          await new Promise((resolve) => { video.onseeked = resolve; });
+        }
+        frames.push(clickFrame(video, video.videoWidth, video.videoHeight, 1000 / CLICK_FPS));
+      }
+      return frames;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  async function pickClick(set, file) {
+    let frames;
+    try {
+      frames = await readAnimation(file);
+    } catch (error) {
+      alert(`${file.name} couldn\u2019t be read as an animation: ${error.message}`);
+      return;
+    }
+    if (!frames || !frames.length) {
+      alert(`${file.name} has no frames to play.`);
+      return;
+    }
+    const { blob, width, height } = await cursorStrip(frames);
+    const name = file.name.replace(/\.[^.]*$/, '') || 'click';
+    const path = stageFile(new File([blob], `${name}.png`, { type: 'image/png' }), `assets/click-${slug(name)}-${Date.now().toString(36)}.png`);
+    if (!path) return;
+    set.image = path;
+    set.frames = { count: frames.length, width, height, delays: frames.map((f) => Math.round(f.delay) || 40) };
+    set.size = Math.min(Math.max(width, 24), 200);
+    redraw();
   }
 
   // ---------- Mouse effect (Theme tab) ----------
@@ -4425,7 +4928,7 @@
       return;
     }
     if (!frames) {
-      const path = stageFile(file, `assets/cursor-${Date.now().toString(36)}${extension(file) || '.png'}`);
+      const path = stageFile(file, `assets/cursor-${Date.now().toString(36)}${extension(file) || '.png'}`, { keepFormat: true });
       if (!path) return;
       cur.image = path;
       delete cur.frames;
@@ -4435,7 +4938,7 @@
     }
     const { blob, width, height } = await cursorStrip(frames);
     const name = file.name.replace(/\.[^.]*$/, '') || 'cursor';
-    const path = stageFile(new File([blob], `${name}.png`, { type: 'image/png' }), `assets/cursor-${slug(name)}-${Date.now().toString(36)}.png`);
+    const path = stageFile(new File([blob], `${name}.png`, { type: 'image/png' }), `assets/cursor-${slug(name)}-${Date.now().toString(36)}.png`, { keepFormat: true });
     if (!path) return;
     const first = frames[0];
     cur.image = path;
@@ -4509,7 +5012,6 @@
           ['center', 'The middle of the image'], ['top-left', 'The top-left corner (for arrow shapes)']]),
         grow('Grow a little over links and buttons'),
       ] : null,
-      check(cur, 'magnetic', 'Magnetic buttons: buttons drift a little toward the mouse'),
       h('p', { class: 'adm-hint', text: 'Only on computers with a mouse or trackpad. Phones and tablets keep their normal touch, and visitors who prefer less motion get the normal pointer.' }));
   }
 
@@ -4755,7 +5257,29 @@
         const path = stageFile(file, `assets/profile-${Date.now().toString(36)}${extension(file)}`);
         if (path) { c.about.photo = path; rerenderTab(); }
       }, () => { c.about.photo = ''; rerenderTab(); }, 'A square-ish portrait works best. Without one, the text uses the full width.', 'photo'),
+      c.about.photo ? photoLookBox(c.about.photoLook) : null,
     ];
+  }
+
+  // The same as the bar on the photo (see decoratePhoto)
+  function photoLookBox(look) {
+    return h('div', { class: 'adm-form adm-group-box' },
+      h('h3', { class: 'adm-group', text: 'Photo framing' }),
+      h('p', { class: 'adm-hint', text: 'Also on the page: hover the photo for its bar, drag its inner corner to resize it, and Crop to move and zoom the picture in its frame.' }),
+      h('div', { class: 'adm-row2' },
+        choice(look, 'size', 'Size', PHOTO_SIZES.map(([value, percent, name]) => [value, `${name} (${percent}% of the width)`])),
+        choice(look, 'frame', 'Frame', PHOTO_FRAMES)),
+      h('div', { class: 'adm-row2' },
+        choice(look, 'strip', 'Accent', PHOTO_STRIPS),
+        choice(look, 'accent', 'Accent colour', PHOTO_ACCENTS)),
+      choice(look, 'align', 'Text beside it', PHOTO_ALIGNS),
+      slider(look, 'zoom', 'Zoom', 1, 3, 0.05, '\u00D7'),
+      h('div', null, h('button', {
+        class: 'adm-btn',
+        type: 'button',
+        text: 'Reset the crop',
+        onclick: () => { Object.assign(look, { x: 50, y: 40, zoom: 1 }); rerenderTab(); },
+      })));
   }
 
   function reelEditor() {
@@ -6218,6 +6742,7 @@
         updateStatus('Making pictures smaller…');
         await Promise.all(shrinking.values());
       }
+      renamePaths(content);
       const used = referencedPaths(content);
       const uploads = [...state.pending].filter(([path]) => used.has(path));
       const entries = [];
