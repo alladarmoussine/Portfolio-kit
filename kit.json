@@ -1,9 +1,9 @@
 {
   "kit": "alladarmoussine/portfolio-kit",
   "source": "alladarmoussine/AlladarMoussineSite",
-  "build": 46,
+  "build": 47,
   "date": "2026-11-05",
-  "commit": "cc077ee",
+  "commit": "a5b9ef1",
   "files": [
     ".gitattributes",
     "404.html",
@@ -17,6 +17,11 @@
     "starter/site.js"
   ],
   "notes": [
+    {
+      "build": 47,
+      "date": "2026-11-05",
+      "message": "Admin: update site content"
+    },
     {
       "build": 46,
       "date": "2026-11-05",
@@ -161,11 +166,6 @@
       "build": 18,
       "date": "2026-10-28",
       "message": "Dark and light for visitors"
-    },
-    {
-      "build": 17,
-      "date": "2026-10-26",
-      "message": "Merge remote-tracking branch 'origin/dev'"
     }
   ]
 }
